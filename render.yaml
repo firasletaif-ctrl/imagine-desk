@@ -15,6 +15,10 @@ services:
         value: "1"
       - key: IMAGINE_SETUP_TOKEN
         sync: false
+      # Date d’expiration de la base gratuite (création + 30 jours), au format
+      # AAAA-MM-JJ : l’application avertit dans Comptes 7 jours avant.
+      - key: IMAGINE_DB_EXPIRES_AT
+        sync: false
       # Utilisé seulement si DATABASE_URL est absent (secours local, non durable).
       - key: IMAGINE_DB_PATH
         value: /app/data/imagine_desk.sqlite3

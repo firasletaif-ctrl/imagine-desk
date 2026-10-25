@@ -335,14 +335,15 @@ function storagePanel(storage){
   const postgres=storage.backend==='postgres';
   const size=postgres?'':(storage.sizeBytes?` · ${(storage.sizeBytes/1024).toFixed(0)} Ko`:' · fichier absent');
   const path=esc(storage.path||'—');
-  const warning=storage.ephemeral?`<div class="notice warning" style="margin-top:10px">${icon('info')}<span><strong>Données non durables.</strong> ${esc(storage.warnings||'')}</span></div>`:postgres?`<div class="notice" style="margin-top:10px">${icon('cloud')}<span><strong>Base PostgreSQL connectée.</strong> Les congrès, inscrits et paiements sont conservés par la base gérée (Render) : ils survivent aux redéploiements et aux mises en veille. La sauvegarde manuelle produit un fichier <code>.sql</code>.</span></div>`:`<div class="notice" style="margin-top:10px">${icon('cloud')}<span><strong>Base enregistrée sur le serveur.</strong> Les congrès, inscrits et paiements restent disponibles après actualisation de la page ou redémarrage du serveur. Exportez tout de même une sauvegarde avant chaque congrès.</span></div>`;
   const engine=postgres?'PostgreSQL (DATABASE_URL)':'Base SQLite lue par le serveur';
-  return `<section class="db-backup-panel"><h3 class="card-title">Où sont mes données</h3><p>${esc(engine)} : <code class="storage-path">${path}</code>${esc(size)}${!postgres&&storage.envOverride?' · via IMAGINE_DB_PATH':''}</p>${warning}</section>`;
+  const last=storage.lastBackupAt?`Dernière sauvegarde exportée le ${esc(String(storage.lastBackupAt).slice(0,10))}${typeof storage.backupAgeDays==='number'?` (il y a ${storage.backupAgeDays} jour${storage.backupAgeDays>1?'s':''})`:''}.`:'Aucune sauvegarde exportée depuis cette base pour le moment.';
+  const expiry=storage.expiresAt?` Échéance de la base : ${esc(String(storage.expiresAt).slice(0,10))}${typeof storage.daysLeft==='number'?` (${storage.daysLeft} jour${storage.daysLeft>1?'s':''} restants)`:''}.`:'';
+  const warning=storage.ephemeral?`<div class="notice warning" style="margin-top:10px">${icon('info')}<span><strong>Données non durables.</strong> ${esc(storage.warnings||'')}</span></div>`:`<div class="notice" style="margin-top:10px">${icon('cloud')}<span><strong>${postgres?'Base PostgreSQL connectée':'Base enregistrée sur le serveur'}.</strong> ${postgres?'Les congrès, inscrits et paiements sont conservés par la base gérée (Render) : ils survivent aux redéploiements et aux mises en veille.':'Les congrès, inscrits et paiements restent disponibles après actualisation de la page ou redémarrage du serveur.'} La sauvegarde est un fichier <code>.zip</code> lisible dans Excel et restaurable depuis cette page, sans ligne de commande.</span></div>`;
+  return `<section class="db-backup-panel"><h3 class="card-title">Où sont mes données</h3><p>${esc(engine)} : <code class="storage-path">${path}</code>${esc(size)}${!postgres&&storage.envOverride?' · via IMAGINE_DB_PATH':''}</p>${warning}<div class="field-hint" style="margin-top:8px">${last}${expiry}</div></section>`;
 }
 function renderAccountsModal(users,storage){
   const rows=users.map(u=>{const resetButton=u.id===authUser?.id?'':`<button class="btn btn-secondary" type="button" data-action="reset-user" data-id="${esc(u.id)}" data-username="${esc(u.username)}">Réinitialiser</button>`;return `<div class="account-row"><span class="account-avatar">${esc(initials(u.username))}</span><span class="account-info"><strong>${esc(u.username)}${u.id===authUser?.id?' · vous':''}</strong><small>${u.active?'Compte actif':'Compte désactivé'} · créé ${esc(String(u.createdAt||'').slice(0,10)||'—')}</small></span><div class="account-actions"><select class="account-role-select" data-user-role data-id="${esc(u.id)}" aria-label="Rôle de ${esc(u.username)}"><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option><option value="desk" ${u.role==='desk'?'selected':''}>Agent desk</option></select>${resetButton}<button class="btn ${u.active?'btn-danger':'btn-soft'}" type="button" data-action="toggle-user" data-id="${esc(u.id)}" data-active="${u.active?'true':'false'}">${u.active?'Désactiver':'Activer'}</button></div></div>`;}).join('');
-  const isPostgres=storage?.backend==='postgres';
-  const backupPanel=`${storagePanel(storage||null)}<section class="db-backup-panel"><h3 class="card-title">Sauvegarde de la base</h3><p>${isPostgres?'Exportez un fichier <code>.sql</code> à conserver hors de Render (réimport possible avec psql). La restauration de fichier depuis cette page reste réservée au stockage SQLite.':`Exportez un fichier SQLite à conserver hors de Render. L’import restaure les congrès et participants de ce fichier.`}</p><div class="db-backup-actions"><button class="btn btn-secondary" type="button" data-action="export-db">${icon('download')}Exporter la base</button>${isPostgres?'':`<button class="btn btn-primary" type="button" data-action="choose-db-import">${icon('upload')}Importer une base</button>`}</div>${isPostgres?'':`<div class="notice warning" style="margin-top:10px">${icon('info')}<span>Import : remplace les congrès, participants et historique actuels. Les comptes déjà présents sont conservés; les comptes de l’archive sont ajoutés si possible. Les sessions ne sont pas importées. Faites d’abord une exportation et synchronisez tous les desks.</span></div>`}<div class="field-hint" style="margin-top:8px">Le fichier exporté contient des empreintes de mots de passe. Gardez-le dans un endroit privé et sûr.</div></section>`;
+  const backupPanel=`${storagePanel(storage||null)}<section class="db-backup-panel"><h3 class="card-title">Sauvegarde et restauration</h3><p>« Exporter la sauvegarde » télécharge un fichier <code>.zip</code> (un CSV par table + manifeste) qui contient les congrès, inscrits, paiements, comptes et historique. « Restaurer une sauvegarde » remplace toutes les données actuelles par celles du fichier, directement depuis ce navigateur.</p><div class="db-backup-actions"><button class="btn btn-secondary" type="button" data-action="export-db">${icon('download')}Exporter la sauvegarde</button><button class="btn btn-primary" type="button" data-action="restore-backup">${icon('upload')}Restaurer une sauvegarde</button></div><div class="notice warning" style="margin-top:10px">${icon('info')}<span>La restauration remplace congrès, inscrits, paiements, comptes et historique. Votre mot de passe est demandé pour confirmer. Elle se fait en une seule transaction : en cas d’erreur, rien n’est modifié et votre compte reste administrateur.</span></div><div class="field-hint" style="margin-top:8px">Le fichier exporté contient les empreintes des mots de passe. Gardez-le dans un endroit privé et sûr.</div></section>`;
   openModal(`<div class="modal-head"><div><h2>Comptes de l’équipe</h2><p>Un compte individuel par personne. Les mots de passe ne sont jamais affichés.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body">${backupPanel}<div class="account-list">${rows||'<div class="empty-state">Aucun compte.</div>'}</div><div style="padding-top:14px;border-top:1px solid #edf0f5"><h3 class="card-title" style="margin:0 0 11px">Créer un compte</h3><form id="createAccountForm"><div class="form-grid"><div class="field"><label for="newUsername">Nom d’utilisateur</label><input id="newUsername" name="username" required minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]+" placeholder="ex. accueil1"></div><div class="field"><label for="newRole">Rôle</label><select id="newRole" name="role"><option value="desk">Agent desk</option><option value="admin">Administrateur</option></select></div><div class="field"><label for="newPassword">Mot de passe provisoire</label><input id="newPassword" name="password" type="password" required minlength="12" autocomplete="new-password"></div><div class="field"><label for="newPasswordConfirm">Confirmer le mot de passe</label><input id="newPasswordConfirm" name="passwordConfirm" type="password" required minlength="12" autocomplete="new-password"></div></div><div class="field-hint" style="margin-top:8px">12 caractères minimum. Transmettez le mot de passe provisoire de façon privée et demandez à l’agent de le changer après la première connexion.</div><div style="display:flex;justify-content:flex-end;margin-top:11px"><button class="btn btn-primary" type="submit">${icon('plus')}Créer le compte</button></div></form></div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button></div>`,true);
 }
 function openOwnPasswordModal(){
@@ -394,36 +395,42 @@ async function exportDatabaseBackup(){
     const blob=await response.blob();
     const disposition=response.headers.get('Content-Disposition')||'';
     const match=disposition.match(/filename="?([^";]+)"?/i);
-    const filename=match?.[1]||`imagine-events-backup-${new Date().toISOString().slice(0,10)}.sqlite3`;
+    const filename=match?.[1]||`imagine-events-sauvegarde-${new Date().toISOString().slice(0,10)}.zip`;
     const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
-    apiOnline=true;updateStatus();showToast('Sauvegarde SQLite téléchargée. Conservez-la hors de Render.');
-  }catch(error){showToast(error.message||'Export de la base impossible.');}
+    apiOnline=true;updateStatus();showToast('Sauvegarde ZIP téléchargée. Conservez-la hors de Render.');
+  }catch(error){showToast(error.message||'Export de la sauvegarde impossible.');}
 }
-async function importDatabaseBackup(file){
-  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut importer une base.');return;}
-  if(!navigator.onLine){showToast('Connectez-vous au serveur pour importer une base.');return;}
-  const queuesBefore=JSON.parse(JSON.stringify(store.queueByEvent||{}));
-  const pendingBefore=pendingTotal();
+function openRestoreBackupModal(){
+  openModal(`<div class="modal-head"><div><h2>Restaurer une sauvegarde</h2><p>Le fichier <code>.zip</code> exporté depuis Comptes remplace toutes les données actuelles.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><form id="restoreBackupForm"><div class="modal-body"><div class="form-grid"><div class="field full"><label for="restoreBackupFileInput">Fichier de sauvegarde</label><input id="restoreBackupFileInput" name="file" type="file" accept=".zip,.sqlite3,.sqlite,.db,application/zip,application/x-zip-compressed" required><div class="field-hint" id="restoreBackupFileName" style="margin-top:6px">Choisissez le fichier .zip téléchargé par « Exporter la sauvegarde ».</div></div><div class="field full"><label for="restoreBackupPassword">Mot de passe de votre compte administrateur</label><input id="restoreBackupPassword" name="password" type="password" required autocomplete="current-password"><div class="field-hint" style="margin-top:6px">Confirmation obligatoire : la restauration écrase les données actuelles. Vérifiez d’abord votre dernière sauvegarde.</div></div></div><div class="notice warning" style="margin-top:10px">${icon('info')}<span>Les sessions des autres appareils seront fermées. Votre compte reste administrateur et conserve son mot de passe ; les comptes présents dans la sauvegarde sont rétablis tels quels.</span></div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-primary" type="submit" id="restoreBackupSubmit">${icon('upload')}Restaurer</button></div></form>`,true);
+}
+async function importDatabaseBackup(file,password){
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut restaurer une sauvegarde.');return false;}
+  if(!navigator.onLine){showToast('Connectez-vous au serveur pour restaurer une sauvegarde.');return false;}
   const filename=String(file?.name||'').toLowerCase();
-  if(!filename.endsWith('.sqlite3')&&!filename.endsWith('.sqlite')&&!filename.endsWith('.db')){showToast('Choisissez un fichier de sauvegarde .sqlite3, .sqlite ou .db.');return;}
-  if(file.size>50*1024*1024){showToast('La sauvegarde dépasse la limite de 50 Mo.');return;}
-  const pendingWarning=pendingBefore?` Cette machine a ${pendingBefore} action(s) hors ligne en attente; elles seront rejouées si les congrès correspondants existent dans la sauvegarde, sinon elles devront être vérifiées.`:'';
-  const confirmed=window.confirm(`Importer « ${file.name} » va remplacer les congrès, participants et historiques de synchronisation actuels. Les comptes existants seront conservés; les sessions de l’archive ne seront pas reprises. Assurez-vous d’avoir exporté la base actuelle et d’avoir arrêté les autres desks.${pendingWarning} Continuer ?`);
-  if(!confirmed)return;
+  if(!filename.endsWith('.zip')&&!filename.endsWith('.sqlite3')&&!filename.endsWith('.sqlite')&&!filename.endsWith('.db')){showToast('Choisissez le fichier .zip téléchargé par « Exporter la sauvegarde ».');return false;}
+  if(file.size>50*1024*1024){showToast('La sauvegarde dépasse la limite de 50 Mo.');return false;}
+  if(!window.confirm(`Restaurer « ${file.name} » ? Les congrès, inscrits, paiements, comptes et historique actuels seront remplacés par ceux de la sauvegarde. Les sessions des autres appareils seront fermées. Continuer ?`))return false;
+  const submit=$('#restoreBackupSubmit');
+  if(submit){submit.disabled=true;submit.textContent='Restauration…';}
+  const queuesBefore=JSON.parse(JSON.stringify(store.queueByEvent||{}));
   try{
-    const formData=new FormData();formData.append('file',file,file.name);
+    const formData=new FormData();formData.append('file',file,file.name);formData.append('password',String(password||''));
     const data=await apiUpload('/api/admin/backup/import',formData);
     store.events=[];store.activeEventId='';store.peopleByEvent={};store.cursorByEvent={};store.queueByEvent=queuesBefore;saveStore();
     const eventsData=await api('/api/events');store.events=eventsData.events||[];chooseActiveEvent();
     if(store.activeEventId)await refreshParticipants(store.activeEventId,true);
     const restoredIds=new Set(store.events.map(e=>String(e.id)));
     const orphaned=Object.entries(queuesBefore).filter(([eventId,queue])=>Array.isArray(queue)&&queue.length&&!restoredIds.has(String(eventId))).reduce((n,[,queue])=>n+queue.length,0);
-    for(const [eventId,queue] of Object.entries(queuesBefore))if(restoredIds.has(String(eventId))&&Array.isArray(queue)&&queue.length)await syncQueue(eventId);
+    for(const [eventId,queue] of Object.entries(queuesBefore))if(restoredIds.has(String(eventId))&&Array.isArray(queue)&&queue.length&&navigator.onLine)await syncQueue(eventId);
     const remaining=pendingTotal();
-    saveStore();render();closeModal();
+    const counts=data.restored||{};
+    const detail=data.message||`Restauration : ${counts.events||0} congrès, ${counts.participants||0} inscrits, ${counts.users||0} comptes.`;
     const pendingMessage=remaining?` ${remaining} action(s) hors ligne restent à vérifier${orphaned?` (${orphaned} pour un congrès absent de la sauvegarde)`:''}.`:'';
-    showToast(`Restauration : ${data.events||0} congrès, ${data.participants||0} participants.${pendingMessage}`);
-  }catch(error){showToast(error.message||'Import de la base impossible.');}
+    saveStore();render();closeModal();
+    showToast(`${detail}${pendingMessage}`);
+    return true;
+  }catch(error){showToast(error.message||'Restauration impossible.');return false;}
+  finally{if(submit){submit.disabled=false;submit.textContent='Restaurer';}}
 }
 async function importFile(file){
   const event=getEvent();
@@ -464,7 +471,7 @@ document.addEventListener('click',async event=>{
   else if(action==='toggle-user'){await toggleAccount(button);return;}
   else if(action==='reset-user'){openResetPasswordModal(id,button.dataset.username);return;}
   else if(action==='export-db'){await exportDatabaseBackup();return;}
-  else if(action==='choose-db-import'){$('#databaseBackupFile')?.click();return;}
+  else if(action==='restore-backup'){openRestoreBackupModal();return;}
   else if(action==='new-event')openEventModal();
   else if(action==='settings'){const ev=getEvent();if(ev)openEventModal(ev);else openEventModal();}
   else if(action==='edit-event')openEventModal(getEvent(id));
@@ -494,7 +501,7 @@ document.addEventListener('change',async event=>{
   if(event.target.matches('[data-user-role]')){const id=event.target.dataset.id,role=event.target.value;try{await api(`/api/users/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({role})});showToast('Rôle mis à jour; ce compte devra se reconnecter.');await openAccountsModal();}catch(error){showToast(error.message||'Modification impossible.');await openAccountsModal();}return;}
   if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';saveStore();render();if(id){await refreshParticipants(id,!store.cursorByEvent[id]);await syncQueue(id);}}
   if(event.target.id==='csvFile'){const file=event.target.files?.[0];if(file)await importFile(file);event.target.value='';}
-  if(event.target.id==='databaseBackupFile'){const file=event.target.files?.[0];if(file)await importDatabaseBackup(file);event.target.value='';}
+  if(event.target.id==='restoreBackupFileInput'){const file=event.target.files?.[0];const label=$('#restoreBackupFileName');if(label)label.textContent=file?`Fichier choisi : ${file.name} (${(file.size/1024).toFixed(0)} Ko)`:'Choisissez le fichier .zip téléchargé par « Exporter la sauvegarde ».';}
 });
 document.addEventListener('input',event=>{
   if(event.target.id==='peopleSearch'){peopleQuery=event.target.value;renderPeopleRows();}
@@ -521,6 +528,11 @@ document.addEventListener('submit',async event=>{
   if(form.id==='resetPasswordForm'){
     event.preventDefault();const fd=new FormData(form),password=String(fd.get('password')||''),confirm=String(fd.get('passwordConfirm')||''),id=form.dataset.id;if(password!==confirm){showToast('Les deux mots de passe ne correspondent pas.');return;}
     try{await api(`/api/users/${encodeURIComponent(id)}/password`,{method:'POST',body:JSON.stringify({password})});closeModal();showToast('Mot de passe réinitialisé; les sessions de ce compte ont été fermées.');await openAccountsModal();}catch(error){showToast(error.message||'Réinitialisation impossible.');}return;
+  }
+  if(form.id==='restoreBackupForm'){
+    event.preventDefault();const fd=new FormData(form),file=fd.get('file'),password=String(fd.get('password')||'');
+    if(!file||!file.name){showToast('Choisissez d’abord le fichier .zip de la sauvegarde.');return;}
+    await importDatabaseBackup(file,password);return;
   }
   if(form.id==='ownPasswordForm'){
     event.preventDefault();const fd=new FormData(form),newPassword=String(fd.get('newPassword')||''),confirm=String(fd.get('passwordConfirm')||'');if(newPassword!==confirm){showToast('Les nouveaux mots de passe ne correspondent pas.');return;}
