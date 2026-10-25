@@ -26,9 +26,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+try:  # PostgreSQL n’est nécessaire que si DATABASE_URL est fourni (Render, OVH…).
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except Exception:  # pragma: no cover - l’application reste utilisable en SQLite
+    psycopg2 = None
+    RealDictCursor = None
+
+DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+if psycopg2 is not None:
+    DB_INTEGRITY_ERRORS += (psycopg2.IntegrityError,)
+
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 DB_PATH = Path(os.environ.get("IMAGINE_DB_PATH", ROOT / "data" / "imagine_desk.sqlite3"))
+# PostgreSQL managé (Render, OVH, Neon…) : une seule variable DATABASE_URL suffit.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+USE_POSTGRES = DATABASE_URL.startswith("postgresql://")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 MAX_BODY = 12 * 1024 * 1024
@@ -53,6 +69,8 @@ def utc_now() -> str:
 
 def db_display_path() -> str:
     """Chemin lisible de la base (relatif au projet quand c’est possible)."""
+    if USE_POSTGRES:
+        return "PostgreSQL (DATABASE_URL)"
     try:
         return str(DB_PATH.resolve().relative_to(ROOT.resolve()))
     except (ValueError, OSError):
@@ -61,6 +79,8 @@ def db_display_path() -> str:
 
 def db_is_ephemeral() -> bool:
     """Vrai si la base est sur un dossier temporaire, perdu au redémarrage du serveur."""
+    if USE_POSTGRES:
+        return False
     try:
         resolved = str(DB_PATH.resolve())
     except OSError:
@@ -68,117 +88,288 @@ def db_is_ephemeral() -> bool:
     return resolved.startswith(EPHEMERAL_PREFIXES)
 
 
+def db_backend() -> str:
+    return "postgres" if USE_POSTGRES else "sqlite"
+
+
+def redact_database_url(url: str = "") -> str:
+    """Masque le mot de passe avant tout affichage ou journal."""
+    url = url or DATABASE_URL
+    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", url)
+
+
 def storage_info() -> dict:
+    if USE_POSTGRES:
+        host = ""
+        try:
+            from urllib.parse import urlsplit
+            host = urlsplit(DATABASE_URL).hostname or ""
+        except ValueError:
+            host = ""
+        return {
+            "backend": "postgres",
+            "path": f"PostgreSQL · {host}" if host else "PostgreSQL (DATABASE_URL)",
+            "exists": True,
+            "sizeBytes": 0,
+            "ephemeral": False,
+            "envOverride": True,
+            "warnings": "",
+            "detail": redact_database_url(),
+        }
     exists = DB_PATH.is_file()
     try:
         size = DB_PATH.stat().st_size if exists else 0
     except OSError:
         size = 0
     return {
+        "backend": "sqlite",
         "path": db_display_path(),
         "exists": exists,
         "sizeBytes": size,
         "ephemeral": db_is_ephemeral(),
         "envOverride": bool(os.environ.get("IMAGINE_DB_PATH", "").strip()),
+        "detail": "",
         "warnings": (
             "La base est enregistrée dans un dossier temporaire : elle sera perdue quand le serveur "
             "redémarre ou quand l’hébergement redéploie. Déplacez-la vers un disque persistant "
-            "(variable IMAGINE_DB_PATH), puis exportez régulièrement une sauvegarde."
+            "(variable IMAGINE_DB_PATH), ou utilisez la base PostgreSQL de Render (DATABASE_URL)."
             if db_is_ephemeral() else ""
         ),
     }
 
 
-def connect() -> sqlite3.Connection:
+def pg_sql(sql: str) -> str:
+    """Traduit une requête écrite pour SQLite vers le dialecte PostgreSQL."""
+    sql = sql.replace("COLLATE NOCASE", "").replace("COLLATE nocase", "")
+    sql = sql.replace("BEGIN IMMEDIATE", "BEGIN")
+    sql = re.sub(r"\bREAL\b", "DOUBLE PRECISION", sql)
+    # Placeholders « ? » -> « %s » (hors littéraux de chaîne).
+    out, in_quote = [], False
+    for ch in sql:
+        if ch == "'":
+            in_quote = not in_quote
+        if ch == "?" and not in_quote:
+            out.append("%s")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+class DBCursor:
+    """Curseur minimal commun à SQLite et PostgreSQL."""
+
+    __slots__ = ("_cur",)
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    @property
+    def rowcount(self) -> int:
+        try:
+            return int(self._cur.rowcount)
+        except Exception:
+            return -1
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def __iter__(self):
+        return iter(self._cur)
+
+
+class DBConnection:
+    """Connexion commune : même API que sqlite3 pour le reste du fichier."""
+
+    def __init__(self, con, backend: str):
+        self._con = con
+        self.backend = backend
+        self._last_rowcount = 0
+
+    def execute(self, sql: str, params=()):
+        params = tuple(params) if params else ()
+        if self.backend == "postgres":
+            cur = self._con.cursor()
+            cur.execute(pg_sql(sql), params or None)
+            wrapper = DBCursor(cur)
+        else:
+            wrapper = DBCursor(self._con.execute(sql, params))
+        self._last_rowcount = wrapper.rowcount
+        return wrapper
+
+    def executescript(self, script: str) -> None:
+        if self.backend == "postgres":
+            for statement in script.split(";"):
+                statement = statement.strip()
+                if statement:
+                    self.execute(statement)
+            return
+        self._con.executescript(script)
+
+    @property
+    def total_changes(self) -> int:
+        if self.backend == "postgres":
+            return self._last_rowcount
+        return self._con.total_changes
+
+    def _pg_transaction_open(self) -> bool:
+        # En autocommit, connection.commit()/rollback() sont des no-op : on envoie
+        # COMMIT/ROLLBACK au serveur quand une transaction explicite est ouverte.
+        status = self._con.info.transaction_status
+        return status in (psycopg2.extensions.TRANSACTION_STATUS_INTRANS,
+                          psycopg2.extensions.TRANSACTION_STATUS_INERROR)
+
+    def commit(self) -> None:
+        if self.backend == "postgres":
+            if self._pg_transaction_open():
+                self._con.cursor().execute("COMMIT")
+            return
+        self._con.commit()
+
+    def rollback(self) -> None:
+        if self.backend == "postgres":
+            if self._pg_transaction_open():
+                self._con.cursor().execute("ROLLBACK")
+            return
+        self._con.rollback()
+
+    def close(self) -> None:
+        self._con.close()
+
+
+def connect() -> DBConnection:
+    if USE_POSTGRES:
+        if psycopg2 is None:
+            raise RuntimeError("Le pilote psycopg2 n’est pas installé : ajoutez psycopg2-binary au requirements.txt.")
+        con = psycopg2.connect(
+            DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=15,
+            application_name="imagine-events-desk", keepalives=1, keepalives_idle=30,
+        )
+        con.autocommit = True  # les transactions sont ouvertes explicitement (BEGIN … commit)
+        return DBConnection(con, "postgres")
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=20, isolation_level=None)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA busy_timeout=20000")
-    return con
+    return DBConnection(con, "sqlite")
+
+
+SCHEMA_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      event_date TEXT NOT NULL DEFAULT '',
+      venue TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      currency TEXT NOT NULL DEFAULT 'TND',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS participants (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
+      company TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'participant',
+      code TEXT NOT NULL,
+      checked_in_at TEXT,
+      payment_status TEXT NOT NULL DEFAULT 'unpaid',
+      payment_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+      payment_method TEXT NOT NULL DEFAULT '',
+      payment_reference TEXT NOT NULL DEFAULT '',
+      payment_confirmed_at TEXT,
+      payment_confirmed_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(event_id, code)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_participants_event_name ON participants(event_id, name)",
+    "CREATE INDEX IF NOT EXISTS idx_participants_event_updated ON participants(event_id, updated_at)",
+    """
+    CREATE TABLE IF NOT EXISTS sync_operations (
+      op_id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      participant_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sync_operations_event ON sync_operations(event_id, created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      password_salt TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('admin','desk')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)",
+]
+
+# Colonnes ajoutées après la première version de l’application (migration douce).
+EXPECTED_COLUMNS = {
+    "events": [("currency", "TEXT NOT NULL DEFAULT 'TND'")],
+    "participants": [
+        ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
+        ("payment_amount", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+        ("payment_method", "TEXT NOT NULL DEFAULT ''"),
+        ("payment_reference", "TEXT NOT NULL DEFAULT ''"),
+        ("payment_confirmed_at", "TEXT"),
+        ("payment_confirmed_by", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
 
 
 def init_db() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not USE_POSTGRES:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = connect()
     try:
-        con.execute("PRAGMA journal_mode=WAL")
-        con.executescript("""
-        CREATE TABLE IF NOT EXISTS events (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          event_date TEXT NOT NULL DEFAULT '',
-          venue TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL DEFAULT 'active',
-          currency TEXT NOT NULL DEFAULT 'TND',
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS participants (
-          id TEXT PRIMARY KEY,
-          event_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          email TEXT NOT NULL DEFAULT '',
-          company TEXT NOT NULL DEFAULT '',
-          category TEXT NOT NULL DEFAULT 'participant',
-          code TEXT NOT NULL,
-          checked_in_at TEXT,
-          payment_status TEXT NOT NULL DEFAULT 'unpaid',
-          payment_amount REAL NOT NULL DEFAULT 0,
-          payment_method TEXT NOT NULL DEFAULT '',
-          payment_reference TEXT NOT NULL DEFAULT '',
-          payment_confirmed_at TEXT,
-          payment_confirmed_by TEXT NOT NULL DEFAULT '',
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
-          UNIQUE(event_id, code)
-        );
-        CREATE INDEX IF NOT EXISTS idx_participants_event_name ON participants(event_id, name COLLATE NOCASE);
-        CREATE INDEX IF NOT EXISTS idx_participants_event_updated ON participants(event_id, updated_at);
-        CREATE TABLE IF NOT EXISTS sync_operations (
-          op_id TEXT PRIMARY KEY,
-          event_id TEXT NOT NULL,
-          participant_id TEXT NOT NULL,
-          action TEXT NOT NULL,
-          result_json TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_sync_operations_event ON sync_operations(event_id, created_at);
-        CREATE TABLE IF NOT EXISTS users (
-          id TEXT PRIMARY KEY,
-          username TEXT NOT NULL COLLATE NOCASE UNIQUE,
-          password_salt TEXT NOT NULL,
-          password_hash TEXT NOT NULL,
-          role TEXT NOT NULL CHECK(role IN ('admin','desk')),
-          active INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-          token_hash TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          expires_at TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
-        """)
-        # Migration douce : bases créées avant l’ajout des paiements.
-        ensure_column(con, "events", "currency", "TEXT NOT NULL DEFAULT 'TND'")
-        ensure_column(con, "participants", "payment_status", "TEXT NOT NULL DEFAULT 'unpaid'")
-        ensure_column(con, "participants", "payment_amount", "REAL NOT NULL DEFAULT 0")
-        ensure_column(con, "participants", "payment_method", "TEXT NOT NULL DEFAULT ''")
-        ensure_column(con, "participants", "payment_reference", "TEXT NOT NULL DEFAULT ''")
-        ensure_column(con, "participants", "payment_confirmed_at", "TEXT")
-        ensure_column(con, "participants", "payment_confirmed_by", "TEXT NOT NULL DEFAULT ''")
+        if con.backend == "sqlite":
+            con.execute("PRAGMA journal_mode=WAL")
+        for statement in SCHEMA_STATEMENTS:
+            con.execute(statement)
+        for table, columns in EXPECTED_COLUMNS.items():
+            for column, definition in columns:
+                ensure_column(con, table, column, definition)
+        if con.backend == "postgres":
+            # Recherche insensible à la casse des noms d’utilisateur (exigence d’unicité).
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username))")
     finally:
         con.close()
 
 
-def ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    existing = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+def ensure_column(con: DBConnection, table: str, column: str, definition: str) -> None:
+    if con.backend == "postgres":
+        existing = {
+            row["column_name"] for row in con.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?",
+                (table,),
+            ).fetchall()
+        }
+    else:
+        existing = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
     if column not in existing:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
@@ -537,7 +728,7 @@ class Handler(BaseHTTPRequestHandler):
         password = body.get("password") if isinstance(body.get("password"), str) else ""
         con = connect()
         try:
-            row = con.execute("SELECT * FROM users WHERE username=? COLLATE NOCASE", (username,)).fetchone()
+            row = con.execute("SELECT * FROM users WHERE lower(username)=lower(?)", (username,)).fetchone()
         finally:
             con.close()
         if not row or not row["active"] or not password_matches(password, row["password_salt"], row["password_hash"]):
@@ -623,13 +814,20 @@ class Handler(BaseHTTPRequestHandler):
         self.json(200,{"ok":True},self.auth_cookie(token))
 
     def export_database_backup(self):
-        """Télécharge une copie SQLite cohérente, sans sessions actives."""
+        """Télécharge une sauvegarde cohérente, sans sessions actives.
+
+        SQLite : copie binaire via l’API backup. PostgreSQL : fichier SQL (pg_dump
+        léger, tables et données), nommé .sql et rechargeable via psql.
+        """
+        if USE_POSTGRES:
+            self.export_postgres_backup()
+            return
         temp_fd, temp_name = tempfile.mkstemp(prefix="imagine-events-export-", suffix=".sqlite3")
         os.close(temp_fd)
         source = None
         target = None
         try:
-            source = connect()
+            source = sqlite3.connect(DB_PATH, timeout=20)
             target = sqlite3.connect(temp_name, timeout=20)
             source.backup(target, pages=256, sleep=0.05)
             target.execute("DELETE FROM sessions")
@@ -659,6 +857,51 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
 
+    def export_postgres_backup(self):
+        """Export SQL des tables de l’application (aucune session, aucun mot de passe en clair)."""
+        con = connect()
+        try:
+            lines = [
+                "-- Sauvegarde Imagine Events Desk",
+                f"-- {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+                "-- Réimport : psql \"$DATABASE_URL\" -f ce-fichier.sql",
+                "BEGIN;",
+                "DELETE FROM sync_operations;",
+                "DELETE FROM participants;",
+                "DELETE FROM events;",
+                "DELETE FROM sessions;",
+                "DELETE FROM users;",
+            ]
+            # Les comptes sont inclus (empreintes PBKDF2, jamais les mots de passe en clair),
+            # comme dans la sauvegarde SQLite ; les sessions sont exclues.
+            for table in ("events", "users", "participants", "sync_operations"):
+                rows = con.execute(f"SELECT * FROM {table}").fetchall()
+                for row in rows:
+                    columns = list(row.keys())
+                    values = []
+                    for column in columns:
+                        value = row[column]
+                        if value is None:
+                            values.append("NULL")
+                        elif isinstance(value, (int, float)):
+                            values.append(repr(value))
+                        else:
+                            values.append("'" + str(value).replace("'", "''") + "'")
+                    lines.append(
+                        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(values)});"
+                    )
+            lines.append("COMMIT;")
+            payload = ("\n".join(lines) + "\n").encode("utf-8")
+            if len(payload) > MAX_BACKUP_FILE:
+                self.json(413, {"error":"La sauvegarde dépasse la limite de 50 Mo."})
+                return
+            filename = "imagine-events-backup-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ") + ".sql"
+            self.send_bytes(200, payload, "application/sql; charset=utf-8", {
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            })
+        finally:
+            con.close()
+
     def import_database_backup(self):
         """Remplace les données d’événements par une sauvegarde SQLite validée.
 
@@ -669,7 +912,13 @@ class Handler(BaseHTTPRequestHandler):
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type.lower():
             raise ValueError("Choisissez un fichier SQLite à importer.")
+        # Lire le corps avant de refuser : sinon le client reçoit une connexion coupée.
         raw = self.read_raw(MAX_BACKUP_REQUEST)
+        if USE_POSTGRES:
+            raise ValueError(
+                "La restauration de fichier est réservée au stockage SQLite. En PostgreSQL, "
+                "restaurez la sauvegarde .sql avec psql ou depuis le tableau de bord Render."
+            )
         envelope = ("MIME-Version: 1.0\r\nContent-Type: " + content_type + "\r\n\r\n").encode("latin-1") + raw
         try:
             message = BytesParser(policy=policy.default).parsebytes(envelope)
@@ -821,16 +1070,29 @@ class Handler(BaseHTTPRequestHandler):
                         skipped_users += 1
                         continue
                     before = con.total_changes
-                    con.execute("INSERT OR IGNORE INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (
+                    values = (
                         clean_text(item.get("id"), 100) or "usr-" + uuid.uuid4().hex,
                         username, salt, password_hash, role, int(bool(item.get("active", 1))),
                         clean_text(item.get("created_at", ""), 64) or utc_now(),
                         clean_text(item.get("updated_at", ""), 64) or utc_now()
-                    ))
-                    if con.total_changes > before:
-                        imported_users += 1
+                    )
+                    if con.backend == "postgres":
+                        # Pas de « INSERT OR IGNORE » en PostgreSQL : on isole la ligne
+                        # dans un point de sauvegarde et on ignore un conflit d’identifiant.
+                        con.execute("SAVEPOINT user_import")
+                        try:
+                            con.execute("INSERT INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", values)
+                            con.execute("RELEASE SAVEPOINT user_import")
+                            imported_users += 1
+                        except DB_INTEGRITY_ERRORS:
+                            con.execute("ROLLBACK TO SAVEPOINT user_import")
+                            skipped_users += 1
                     else:
-                        skipped_users += 1
+                        con.execute("INSERT OR IGNORE INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", values)
+                        if con.total_changes > before:
+                            imported_users += 1
+                        else:
+                            skipped_users += 1
 
             con.commit()
             self.json(200, {
@@ -864,7 +1126,10 @@ class Handler(BaseHTTPRequestHandler):
             self.json(200, self.auth_status())
             return
         if path == "/api/health":
-            self.json(200, {"ok": True, "time": utc_now(), "storage": "sqlite-wal"})
+            self.json(200, {
+                "ok": True, "time": utc_now(), "storage": db_backend(),
+                "database": db_display_path(), "persistent": not db_is_ephemeral(),
+            })
             return
         user = None
         if path.startswith("/api/"):
@@ -1013,7 +1278,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json(413, {"error":str(exc)})
         except ValueError as exc:
             self.json(400, {"error":str(exc)})
-        except sqlite3.IntegrityError as exc:
+        except DB_INTEGRITY_ERRORS as exc:
+            print("POST integrity error:", repr(exc)[:300], flush=True)
             self.json(409, {"error":"Conflit de données. Vérifiez le nom d’utilisateur, le code badge ou la liste."})
         except Exception as exc:
             print("POST error:", repr(exc), flush=True)
@@ -1046,7 +1312,7 @@ class Handler(BaseHTTPRequestHandler):
             self.json(413, {"error":str(exc)})
         except ValueError as exc:
             self.json(400, {"error":str(exc)})
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERRORS:
             self.json(409, {"error":"Conflit de données."})
         except Exception as exc:
             print("PATCH error:", repr(exc), flush=True)
@@ -1438,7 +1704,10 @@ def main():
     server=ThreadingHTTPServer((HOST,PORT),Handler)
     server.daemon_threads=True
     print(f"Imagine Events Desk démarré sur http://{HOST}:{PORT}")
-    print(f"Base locale : {DB_PATH}")
+    if USE_POSTGRES:
+        print(f"Base PostgreSQL : {redact_database_url()}")
+    else:
+        print(f"Base locale : {DB_PATH}")
     if db_is_ephemeral():
         print("ATTENTION : cette base est dans un dossier temporaire ; les congrès et les inscrits")
         print("seront perdus au redémarrage. Définissez IMAGINE_DB_PATH vers un dossier persistant.")

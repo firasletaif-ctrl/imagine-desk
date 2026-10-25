@@ -1,4 +1,4 @@
-const CACHE_NAME = 'imagine-events-desk-shell-v5-storage';
+const CACHE_NAME = 'imagine-events-desk-shell-v6-postgres';
 const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).catch(() => {}));

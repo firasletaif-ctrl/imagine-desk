@@ -1,1 +1,3 @@
 openpyxl>=3.1.5,<4
+# PostgreSQL managé (Render, OVH, Neon…) — requis seulement si DATABASE_URL est défini.
+psycopg2-binary>=2.9.9,<3
