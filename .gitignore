@@ -1,0 +1,22 @@
+# Base de données locale (jamais dans Git : elle contient des données de participants
+# et les empreintes des mots de passe). Le serveur crée ce dossier automatiquement.
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite
+*.db
+
+# Sauvegardes et exports manuels
+*.bak
+backup-*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Divers outils / OS
+.DS_Store
+*.log

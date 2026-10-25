@@ -45,6 +45,35 @@ Le tableau de bord affiche le nombre de paiements confirmés et le montant encai
 
 Les événements et les inscrits sont enregistrés séparément dans `data/imagine_desk.sqlite3`. Les postes connectés au même serveur reçoivent les check-ins des autres desks en quelques secondes. Chaque navigateur conserve aussi un cache local; les check-ins, les confirmations de paiement et les ajouts individuels faits pendant une coupure sont mis en file, puis synchronisés au retour de la connexion. Pour le secours hors ligne, ouvrez d’abord l’application et chargez la liste sur chaque appareil, puis gardez l’onglet ouvert. L’import de fichiers CSV/Excel nécessite une connexion au serveur. Le cache local contient des données de participants : utilisez des appareils de confiance et déconnectez-vous en fin de service (la file en attente est conservée jusqu’à sa synchronisation).
 
+## Où sont enregistrées les données
+
+Tout (comptes, congrès, inscrits, arrivées, paiements) est enregistré dans **une base SQLite unique** :
+
+```
+data/imagine_desk.sqlite3
+```
+
+Le serveur crée ce dossier et ce fichier automatiquement au premier lancement; le chemin exact s’affiche au démarrage et, pour l’administrateur, dans **Comptes → Où sont mes données**. Une variable `IMAGINE_DB_PATH` permet de pointer ailleurs.
+
+**Actualiser la page ne supprime rien** : les participants reviennent depuis la base. En revanche, les données disparaissent si la base est écrite dans un **dossier temporaire** (par exemple `/tmp`), car ce dossier est vidé à chaque redémarrage du serveur ou redéploiement de l’hébergeur. Le serveur affiche alors un avertissement au démarrage et l’administrateur voit un bandeau orange dans **Comptes**. Pour cette raison :
+
+- en local et dans l’aperçu, gardez le chemin par défaut `data/imagine_desk.sqlite3` (dossier du projet, non versionné : voir `.gitignore`);
+- sur un hébergement, montez un **disque persistant** et renseignez `IMAGINE_DB_PATH=/chemin/persistant/imagine_desk.sqlite3`;
+- ne versionnez jamais le fichier `.sqlite3` : il contient des données de participants et les empreintes des mots de passe. Les fichiers `data/`, `*.sqlite3`, `*-wal` et `*-shm` sont ignorés par Git.
+
+Le navigateur conserve aussi un cache local de la liste pour le mode hors ligne. Si vous videz les données du site (« vider le cache »), il suffit de vous reconnecter pour recharger la liste depuis la base.
+
+### Jeu de données de démonstration
+
+Pour recréer une démo complète (2 comptes, 1 congrès, 8 inscrits avec paiements variés) :
+
+```bash
+python scripts/demo_seed.py           # crée les données manquantes
+python scripts/demo_seed.py --reset   # repart d’une base de démo neuve
+```
+
+Comptes créés : `demo.accueil` / `DemoAccueil2026!` (admin) et `desk.accueil` / `DemoDesk2026!` (agent). Ces données sont fictives : ne les remplacez pas par de vraies listes dans une démo publique.
+
 ## Déploiement Render
 
 Le projet contient un `Dockerfile` et un `render.yaml` pour lancer une démo sur Render Free. Instructions détaillées : `RENDER-DEMO.md`. L’offre gratuite a un système de fichiers éphémère et le service peut s’endormir; la base SQLite peut donc être perdue après redémarrage ou redéploiement. **Ne pas y importer de vraies listes.**

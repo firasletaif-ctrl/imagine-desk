@@ -43,11 +43,50 @@ SESSION_COOKIE = "imagine_events_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 310_000
 SETUP_TOKEN = os.environ.get("IMAGINE_SETUP_TOKEN", "").strip()
+EPHEMERAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/")
 LOGIN_FAILURES = {}
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def db_display_path() -> str:
+    """Chemin lisible de la base (relatif au projet quand c’est possible)."""
+    try:
+        return str(DB_PATH.resolve().relative_to(ROOT.resolve()))
+    except (ValueError, OSError):
+        return str(DB_PATH)
+
+
+def db_is_ephemeral() -> bool:
+    """Vrai si la base est sur un dossier temporaire, perdu au redémarrage du serveur."""
+    try:
+        resolved = str(DB_PATH.resolve())
+    except OSError:
+        resolved = str(DB_PATH)
+    return resolved.startswith(EPHEMERAL_PREFIXES)
+
+
+def storage_info() -> dict:
+    exists = DB_PATH.is_file()
+    try:
+        size = DB_PATH.stat().st_size if exists else 0
+    except OSError:
+        size = 0
+    return {
+        "path": db_display_path(),
+        "exists": exists,
+        "sizeBytes": size,
+        "ephemeral": db_is_ephemeral(),
+        "envOverride": bool(os.environ.get("IMAGINE_DB_PATH", "").strip()),
+        "warnings": (
+            "La base est enregistrée dans un dossier temporaire : elle sera perdue quand le serveur "
+            "redémarre ou quand l’hébergement redéploie. Déplacez-la vers un disque persistant "
+            "(variable IMAGINE_DB_PATH), puis exportez régulièrement une sauvegarde."
+            if db_is_ephemeral() else ""
+        ),
+    }
 
 
 def connect() -> sqlite3.Connection:
@@ -842,6 +881,11 @@ class Handler(BaseHTTPRequestHandler):
                 finally:
                     con.close()
                 return
+            if path == "/api/admin/storage":
+                if not self.require_admin(user):
+                    return
+                self.json(200, storage_info())
+                return
             if path == "/api/admin/backup/export":
                 if not self.require_admin(user):
                     return
@@ -1395,6 +1439,9 @@ def main():
     server.daemon_threads=True
     print(f"Imagine Events Desk démarré sur http://{HOST}:{PORT}")
     print(f"Base locale : {DB_PATH}")
+    if db_is_ephemeral():
+        print("ATTENTION : cette base est dans un dossier temporaire ; les congrès et les inscrits")
+        print("seront perdus au redémarrage. Définissez IMAGINE_DB_PATH vers un dossier persistant.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
