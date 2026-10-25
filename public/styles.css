@@ -380,3 +380,34 @@ body.studio-dragging .modal-backdrop{backdrop-filter:none!important}
   .bd-frame{border:0;border-radius:0;box-shadow:none}
   .bd-studio .bd-field{outline:0!important}
 }
+
+/* ══ Corbeille des inscrits ══════════════════════════════════════════ */
+.check-col{width:42px;padding-left:16px!important;padding-right:0!important;text-align:center}
+.check-col input{width:17px;height:17px;margin:0;vertical-align:middle;accent-color:#0B1D3A;cursor:pointer}
+tr.row-selected td{background:#F3F7FE}
+tr.row-selected td:first-child{box-shadow:inset 3px 0 0 #0B1D3A}
+.selection-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 13px;padding:11px 16px;border:1px solid #C9D8F0;border-radius:13px;background:#EFF5FF;color:#0B1D3A;font-size:14px;font-weight:750}
+.selection-bar[hidden]{display:none}
+.selection-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.trash-button{gap:7px}
+.trash-count{display:inline-grid;place-items:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;color:#fff;background:#C41E3A;font-size:12px;font-weight:800}
+.icon-action.danger{color:#C41E3A;border-color:#F3D9DE;background:#FFF7F8}
+.icon-action.danger:hover{color:#fff;border-color:#C41E3A;background:#C41E3A}
+.icon-action:disabled,.btn:disabled{opacity:.45;cursor:not-allowed}
+.trash-list-wrap{display:flex;flex-direction:column;gap:9px;margin-top:13px}
+.trash-row{display:flex;align-items:center;gap:13px;padding:12px 15px;border:1px solid #E9EEF6;border-radius:13px;background:#FCFDFF}
+.trash-person{flex:1;min-width:0}
+.trash-person strong{display:block;color:#0B1D3A;font-size:14.5px;overflow-wrap:anywhere}
+.trash-person span{display:block;margin-top:3px;color:#5E6F87;font-size:13px;overflow-wrap:anywhere}
+.trash-person small{display:block;margin-top:3px;color:#96A2B4;font-size:12.5px}
+.trash-actions{display:flex;align-items:center;gap:8px;flex:none}
+.trash-list{margin:14px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;max-height:230px;overflow:auto}
+.trash-list li{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid #EEF1F6;border-radius:10px;background:#FBFCFE;font-size:13.5px}
+.trash-list li strong{color:#0B1D3A}
+.trash-list li span{color:#7A8798;white-space:nowrap}
+.trash-list li.more{justify-content:center;color:#7A8798;font-style:italic}
+@media(max-width:620px){
+  .selection-bar{flex-direction:column;align-items:flex-start}
+  .trash-row{flex-direction:column;align-items:flex-start}
+  .trash-actions{width:100%;justify-content:flex-end}
+}

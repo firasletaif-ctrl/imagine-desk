@@ -2,7 +2,7 @@
 
 const STORAGE_KEY = 'imagine-events-desk-platform-v1';
 const categoryNames = { participant:'Participant', vip:'VIP', speaker:'Intervenant', press:'Presse', team:'Équipe' };
-const defaultStore = { events:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
+const defaultStore = { events:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, trashCountByEvent:{}, trashByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
 function loadStore(){
   try { const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null'); if(saved&&typeof saved==='object') return {...defaultStore,...saved,events:Array.isArray(saved.events)?saved.events:[],peopleByEvent:saved.peopleByEvent||{},cursorByEvent:saved.cursorByEvent||{},queueByEvent:saved.queueByEvent||{},pricesByEvent:saved.pricesByEvent||{},deviceId:saved.deviceId||''}; }
   catch(e){ console.warn('Cache locale non disponible.',e); }
@@ -54,14 +54,16 @@ function icon(name,size=16){
     x:'<path d="m18 6-12 12M6 6l12 12"/>',
     cloud:'<path d="M20 16.2A4.5 4.5 0 0 0 18 7.5a6 6 0 0 0-11.3 1.8A3.7 3.7 0 0 0 7 16.6h11"/><path d="m12 12-3 3m3-3 3 3m-3-3v8"/>',
     file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/>',
-    cash:'<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>'
+    cash:'<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
+    trash:'<path d="M4 7h16M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v5M14 11v5"/>',
+    rotate:'<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>'
   };
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${g[name]||g.info}</svg>`;
 }
 function renderStaticIcons(){ $$('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);}); }
 function saveStore(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(store));}catch(e){try{const trimmed={...store,badgeTemplatesByEvent:{}};localStorage.setItem(STORAGE_KEY,JSON.stringify(trimmed));console.warn('Visuels de badge trop lourds pour le cache local : ils restent en mémoire et sur le serveur.',e);}catch(inner){console.warn('Impossible d’enregistrer le cache local.',inner);}}}
 function getEvent(id=store.activeEventId){return store.events.find(e=>String(e.id)===String(id))||null;}
-function getPeople(eventId=store.activeEventId){if(!eventId)return []; if(!Array.isArray(store.peopleByEvent[eventId]))store.peopleByEvent[eventId]=[];return store.peopleByEvent[eventId];}
+function getPeople(eventId=store.activeEventId){if(!eventId)return []; if(!Array.isArray(store.peopleByEvent[eventId]))store.peopleByEvent[eventId]=[];return store.peopleByEvent[eventId].filter(person=>!person.deletedAt);}
 function getQueue(eventId=store.activeEventId){if(!eventId)return [];if(!Array.isArray(store.queueByEvent[eventId]))store.queueByEvent[eventId]=[];return store.queueByEvent[eventId];}
 function findPerson(id,eventId=store.activeEventId){return getPeople(eventId).find(p=>String(p.id)===String(id));}
 function displayCategory(key){return categoryNames[key]||'Participant';}
@@ -184,9 +186,20 @@ function renderHome(){
   <section><div class="card"><div class="card-head"><div><h2 class="card-title">Présence par catégorie</h2><p class="card-subtitle">Arrivées confirmées sur les inscrits</p></div></div><div class="presence-list">${categories||'<div class="empty-state" style="padding:18px 6px">Importez des inscrits pour voir la progression.</div>'}</div></div><div class="subtle-callout">${icon('info')}<span><strong>Conseil de fiabilité</strong><br>Gardez au moins un appareil en ligne, puis exportez une copie du rapport à la fin de chaque événement.</span></div></section></div>`;
 }
 function peopleFilterCounts(){const p=getPeople();return {all:p.length,pending:p.filter(x=>!x.checkedIn).length,arrived:p.filter(x=>x.checkedIn).length,unpaid:p.filter(x=>needsPayment(x)).length,paid:p.filter(x=>paymentOf(x).status==='paid').length,vip:p.filter(x=>x.category==='vip').length,speaker:p.filter(x=>x.category==='speaker').length};}
-function renderPeople(){const counts=peopleFilterCounts();const filters=[['all','Tous',counts.all],['pending','À accueillir',counts.pending],['arrived','Arrivés',counts.arrived],['unpaid','Paiement à confirmer',counts.unpaid],['paid','Payés',counts.paid],['vip','VIP',counts.vip],['speaker','Intervenants',counts.speaker]];return `${pendingTotal()?noticeHTML('warning',`<strong>${pendingTotal()} action(s) hors ligne en attente.</strong> Elles seront synchronisées à la reconnexion.`):''}<div class="toolbar"><div class="search-wrap">${icon('search')}<input id="peopleSearch" class="search-input" value="${esc(peopleQuery)}" autocomplete="off" placeholder="Nom, e-mail, organisation ou code badge…" aria-label="Rechercher un participant"></div><span class="count-label" id="peopleCount"></span></div><div class="filters">${filters.map(([id,label,count])=>`<button class="filter ${peopleFilter===id?'active':''}" type="button" data-filter="${id}">${label}<b>${count}</b></button>`).join('')}</div><section class="table-card"><div class="table-scroll"><table><thead><tr><th>Participant</th><th>Catégorie</th><th>Code badge</th><th>Statut</th><th>Paiement</th><th>Heure</th><th style="text-align:right">Actions</th></tr></thead><tbody id="peopleRows"></tbody></table></div></section><div class="footnote">${icon('info')}<span>La recherche rapide accepte les codes que vos lecteurs USB/QR transmettent au champ. La colonne « Paiement » permet de confirmer un encaissement, y compris hors ligne. Les badges de cette version affichent le code en texte, sans QR ni code-barres.</span></div>`;}
+function renderPeople(){
+  const counts=peopleFilterCounts();
+  const filters=[['all','Tous',counts.all],['pending','À accueillir',counts.pending],['arrived','Arrivés',counts.arrived],['unpaid','Paiement à confirmer',counts.unpaid],['paid','Payés',counts.paid],['vip','VIP',counts.vip],['speaker','Intervenants',counts.speaker]];
+  const trash=trashCount();
+  const archived=getEvent()?.status==='archived';
+  return `${pendingTotal()?noticeHTML('warning',`<strong>${pendingTotal()} action(s) hors ligne en attente.</strong> Elles seront synchronisées à la reconnexion.`):''}
+  <div class="toolbar"><div class="search-wrap">${icon('search')}<input id="peopleSearch" class="search-input" value="${esc(peopleQuery)}" autocomplete="off" placeholder="Nom, e-mail, organisation ou code badge…" aria-label="Rechercher un participant"></div><span class="count-label" id="peopleCount"></span><button class="btn btn-secondary btn-sm trash-button" type="button" data-action="open-trash">${icon('trash',14)}Corbeille${trash?`<b class="trash-count">${trash}</b>`:''}</button></div>
+  <div class="filters">${filters.map(([id,label,count])=>`<button class="filter ${peopleFilter===id?'active':''}" type="button" data-filter="${id}">${label}<b>${count}</b></button>`).join('')}</div>
+  <div class="selection-bar" id="selectionBar" hidden><span id="selectionCount"></span><div class="selection-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="clear-selection">Annuler la sélection</button><button class="btn btn-danger btn-sm" type="button" data-action="trash-selected" ${archived?'disabled':''}>${icon('trash',12)}Mettre à la corbeille</button></div></div>
+  <section class="table-card"><div class="table-scroll"><table><thead><tr><th class="check-col"><input type="checkbox" id="peopleSelectAll" aria-label="Sélectionner tous les inscrits affichés"></th><th>Participant</th><th>Catégorie</th><th>Code badge</th><th>Statut</th><th>Paiement</th><th>Heure</th><th style="text-align:right">Actions</th></tr></thead><tbody id="peopleRows"></tbody></table></div></section>
+  <div class="footnote">${icon('info')}<span>La recherche rapide accepte les codes que vos lecteurs USB/QR transmettent au champ. Les inscrits supprimés vont dans la <strong>corbeille</strong> du congrès : ils peuvent être restaurés, ou effacés définitivement par un administrateur.</span></div>`;
+}
 function filteredPeople(){const query=norm(peopleQuery);return getPeople().filter(p=>{const match=peopleFilter==='all'||(peopleFilter==='pending'&&!p.checkedIn)||(peopleFilter==='arrived'&&p.checkedIn)||(peopleFilter==='unpaid'&&needsPayment(p))||(peopleFilter==='paid'&&paymentOf(p).status==='paid')||p.category===peopleFilter;const hay=[p.name,p.email,p.company,p.code,displayCategory(p.category),paymentStatusNames[paymentOf(p).status]].join(' ').toLocaleLowerCase('fr');return match&&(!query||hay.includes(query));}).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));}
-function renderPeopleRows(){const tbody=$('#peopleRows');if(!tbody)return;const list=filteredPeople();const count=$('#peopleCount');if(count)count.textContent=`${list.length} résultat${list.length===1?'':'s'} · ${getPeople().length} inscrit${getPeople().length===1?'':'s'}`;if(!list.length){tbody.innerHTML=`<tr><td colspan="7"><div class="empty-state"><strong>${getPeople().length?'Aucun participant trouvé':'Votre liste est vide'}</strong>${getPeople().length?'Essayez une autre recherche ou un autre filtre.':'Importez un CSV/Excel (.xlsx) ou ajoutez un participant.'}</div></td></tr>`;return;}tbody.innerHTML=list.map(p=>`<tr><td><div class="table-person"><span class="avatar">${esc(initials(p.name))}</span><span class="table-person-copy"><button type="button" data-action="details" data-id="${esc(p.id)}">${esc(p.name)}</button><small>${esc(p.email||p.company||'—')}</small></span></div></td><td><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></td><td><span class="code">${esc(p.code||'—')}</span></td><td><span class="status-badge ${p.checkedIn?'arrived':'pending'}"><i></i>${p.checkedIn?'Arrivé':'À accueillir'}</span></td><td>${paymentChipHTML(p)}</td><td>${p.checkedIn?`<span class="time-label">${esc(localTime(p.checkedInAt))}</span>`:'<span style="color:#c4cbd4">—</span>'}</td><td><div class="row-actions"><button class="icon-action" type="button" data-action="badge" data-id="${esc(p.id)}" title="Aperçu badge" aria-label="Aperçu badge">${icon('badge',13)}</button>${p.checkedIn?`<button class="table-action undo" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler</button>`:`<button class="table-action" type="button" data-action="checkin" data-id="${esc(p.id)}" ${getEvent()?.status==='archived'?'disabled':''}>${icon('check',12)}Confirmer</button>`}</div></td></tr>`).join('');}
+function renderPeopleRows(){const tbody=$('#peopleRows');if(!tbody)return;const list=filteredPeople();const count=$('#peopleCount');if(count)count.textContent=`${list.length} résultat${list.length===1?'':'s'} · ${getPeople().length} inscrit${getPeople().length===1?'':'s'}`;if(!list.length){tbody.innerHTML=`<tr><td colspan="8"><div class="empty-state"><strong>${getPeople().length?'Aucun participant trouvé':'Votre liste est vide'}</strong>${getPeople().length?'Essayez une autre recherche ou un autre filtre.':'Importez un CSV/Excel (.xlsx) ou ajoutez un participant.'}</div></td></tr>`;refreshSelectionBar();return;}const archived=getEvent()?.status==='archived';tbody.innerHTML=list.map(p=>{const selected=peopleSelection.has(String(p.id));return `<tr class="${selected?'row-selected':''}"><td class="check-col"><input type="checkbox" data-select-id="${esc(p.id)}" ${selected?'checked':''} aria-label="Sélectionner ${esc(p.name)}"></td><td><div class="table-person"><span class="avatar">${esc(initials(p.name))}</span><span class="table-person-copy"><button type="button" data-action="details" data-id="${esc(p.id)}">${esc(p.name)}</button><small>${esc(p.email||p.company||'—')}</small></span></div></td><td><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></td><td><span class="code">${esc(p.code||'—')}</span></td><td><span class="status-badge ${p.checkedIn?'arrived':'pending'}"><i></i>${p.checkedIn?'Arrivé':'À accueillir'}</span></td><td>${paymentChipHTML(p)}</td><td>${p.checkedIn?`<span class="time-label">${esc(localTime(p.checkedInAt))}</span>`:'<span style="color:#c4cbd4">—</span>'}</td><td><div class="row-actions"><button class="icon-action" type="button" data-action="badge" data-id="${esc(p.id)}" title="Aperçu badge" aria-label="Aperçu badge">${icon('badge',13)}</button>${p.checkedIn?`<button class="table-action undo" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler</button>`:`<button class="table-action" type="button" data-action="checkin" data-id="${esc(p.id)}" ${archived?'disabled':''}>${icon('check',12)}Confirmer</button>`}<button class="icon-action danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" title="Mettre à la corbeille" aria-label="Mettre à la corbeille" ${archived?'disabled':''}>${icon('trash',13)}</button></div></td></tr>`;}).join('');refreshSelectionBar();}
 function paymentRowsHTML(){
   const settled=getPeople().filter(p=>paymentOf(p).status!=='unpaid').slice().sort((a,b)=>String(b.paymentConfirmedAt||'').localeCompare(String(a.paymentConfirmedAt||'')));
   if(!settled.length)return '<tr><td colspan="8"><div class="empty-state">Aucun paiement confirmé pour le moment.</div></td></tr>';
@@ -215,10 +228,10 @@ function renderEvents(){
 }
 function setPage(page){if(!pageMeta[page])return;currentPage=page;render();window.scrollTo({top:0,behavior:'smooth'});}
 function showToast(message){const el=$('#toast');el.innerHTML=`${icon('check',15)}<span>${esc(message)}</span>`;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3400);}
-function mergePeople(eventId,participants){if(!Array.isArray(participants))return false;const map=new Map(getPeople(eventId).map(p=>[String(p.id),p]));let changed=false;participants.forEach(p=>{if(!p||!p.id)return;const old=map.get(String(p.id));if(!old||JSON.stringify(old)!==JSON.stringify(p)){map.set(String(p.id),p);changed=true;}});store.peopleByEvent[eventId]=Array.from(map.values()).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));applyPending(eventId);return changed;}
+function mergePeople(eventId,participants){if(!Array.isArray(participants))return false;const raw=Array.isArray(store.peopleByEvent[eventId])?store.peopleByEvent[eventId]:[];const map=new Map(raw.map(p=>[String(p.id),p]));let changed=false;participants.forEach(p=>{if(!p||!p.id)return;const old=map.get(String(p.id));if(p.deletedAt){if(old){map.delete(String(p.id));changed=true;}return;}if(!old||JSON.stringify(old)!==JSON.stringify(p)){map.set(String(p.id),p);changed=true;}});store.peopleByEvent[eventId]=Array.from(map.values()).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));applyPending(eventId);return changed;}
 function applyPending(eventId){const list=store.peopleByEvent[eventId]||[];const map=new Map(list.map(p=>[String(p.id),p]));for(const op of getQueue(eventId)){if(op.action==='create'&&op.participant&&!map.has(String(op.participant.id)))map.set(String(op.participant.id),{...op.participant});if(op.action==='checkin'||op.action==='undo'){const p=map.get(String(op.participantId));if(p){p.checkedIn=op.action==='checkin';p.checkedInAt=op.action==='checkin'?(op.localTime||new Date().toISOString()):'';}}if(op.action==='payment'){const p=map.get(String(op.participantId)),pay=op.payment||{};if(p){const status=['paid','exempt'].includes(pay.status)?pay.status:'unpaid';p.paymentStatus=status;p.paymentAmount=status==='paid'?Number(pay.amount||0):0;p.paymentMethod=status==='paid'?(pay.method||''):'';p.paymentReference=status==='paid'?(pay.reference||''):'';p.paymentTariff=status==='paid'?(pay.tariff||''):'';p.paymentConfirmedAt=status==='unpaid'?'':(op.localTime||new Date().toISOString());p.paymentConfirmedBy=status==='unpaid'?'':(authUser?.username||p.paymentConfirmedBy||'');}}}store.peopleByEvent[eventId]=Array.from(map.values()).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));}
 async function refreshEvents(silent=false){if(eventsRefreshing||!navigator.onLine)return;eventsRefreshing=true;try{const data=await api('/api/events');store.events=data.events||[];lastEventsRefresh=Date.now();chooseActiveEvent();if(store.activeEventId)loadPrices(store.activeEventId);saveStore();if(!silent||currentPage==='events')render(true);}catch(error){apiOnline=false;updateStatus();}finally{eventsRefreshing=false;}}
-async function refreshParticipants(eventId=store.activeEventId,forceFull=false){if(!eventId||!navigator.onLine||participantRefreshes.has(eventId))return;participantRefreshes.add(eventId);try{const cursor=forceFull?'':(store.cursorByEvent[eventId]||'');const url=`/api/events/${encodeURIComponent(eventId)}/participants${cursor?`?since=${encodeURIComponent(cursor)}`:''}`;const data=await api(url);const changed=mergePeople(eventId,data.participants||[]);if(data.serverTime)store.cursorByEvent[eventId]=data.serverTime;apiOnline=true;saveStore();if(changed&&eventId===store.activeEventId)render(true);else updateStatus();}catch(error){apiOnline=false;updateStatus();}finally{participantRefreshes.delete(eventId);}}
+async function refreshParticipants(eventId=store.activeEventId,forceFull=false){if(!eventId||!navigator.onLine||participantRefreshes.has(eventId))return;participantRefreshes.add(eventId);try{const cursor=forceFull?'':(store.cursorByEvent[eventId]||'');const url=`/api/events/${encodeURIComponent(eventId)}/participants${cursor?`?since=${encodeURIComponent(cursor)}`:''}`;const data=await api(url);const changed=mergePeople(eventId,data.participants||[]);if(typeof data.trashCount==='number')setTrashCount(eventId,data.trashCount);if(data.serverTime)store.cursorByEvent[eventId]=data.serverTime;apiOnline=true;saveStore();if(changed&&eventId===store.activeEventId)render(true);else updateStatus();}catch(error){apiOnline=false;updateStatus();}finally{participantRefreshes.delete(eventId);}}
 async function syncQueue(eventId=store.activeEventId){if(!eventId||!navigator.onLine||syncLocks.has(eventId))return;const queue=getQueue(eventId);if(!queue.length)return;syncLocks.add(eventId);try{const data=await api(`/api/events/${encodeURIComponent(eventId)}/sync`,{method:'POST',body:JSON.stringify({operations:queue,deviceId:store.deviceId})});const done=new Set((data.results||[]).filter(r=>r.ok).map(r=>r.opId));if(Array.isArray(data.participants))mergePeople(eventId,data.participants);store.queueByEvent[eventId]=queue.filter(op=>!done.has(op.opId));applyPending(eventId);if(data.serverTime)store.cursorByEvent[eventId]=data.serverTime;saveStore();if(eventId===store.activeEventId)render(true);if(done.size){refreshEvents(true);}const failed=(data.results||[]).filter(r=>!r.ok);if(failed.length)showToast(`${failed.length} action(s) à vérifier : ${failed[0].error||'participant introuvable'}.`);}catch(error){apiOnline=false;updateStatus();}finally{syncLocks.delete(eventId);}}
 function renderAuthScreen(mode='login',message=''){
   authUser=null;const app=$('#appRoot');if(app)app.hidden=true;const root=$('#authRoot');if(!root)return;root.hidden=false;
@@ -292,7 +305,7 @@ function openAddModal(){
   openModal(`<div class="modal-head"><div><h2>Ajouter un participant</h2><p>En ligne, l’inscription est enregistrée au serveur. Hors ligne, elle rejoint la file locale.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><form id="personForm"><div class="modal-body"><div class="form-grid"><div class="field full"><label for="personName">Nom complet *</label><input id="personName" name="name" required maxlength="180" placeholder="Ex. Amira Ben Salem"></div><div class="field"><label for="personEmail">E-mail</label><input id="personEmail" name="email" type="email" maxlength="180" placeholder="nom@exemple.tn"></div><div class="field"><label for="personCategory">Catégorie</label><select id="personCategory" name="category"><option value="participant">Participant</option><option value="vip">VIP</option><option value="speaker">Intervenant</option><option value="press">Presse</option><option value="team">Équipe</option></select></div><div class="field full"><label for="personCompany">Organisation</label><input id="personCompany" name="company" maxlength="180" placeholder="Entreprise, institution…"></div><div class="field full"><label for="personCode">Code badge</label><input id="personCode" name="code" maxlength="40" placeholder="Généré automatiquement si vide"><span class="field-hint">Un code court est attribué à chaque participant.</span></div></div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-primary" type="submit">${icon('plus')}Ajouter</button></div></form>`,true);
 }
 function openDetails(id){const p=findPerson(id);if(!p)return;const pay=paymentOf(p);const event=getEvent();openModal(`<div class="modal-head"><div><h2>Fiche participant</h2><p>Inscription à ${esc(event?.name||'ce congrès')}.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="detail-hero"><span class="avatar">${esc(initials(p.name))}</span><div><h3>${esc(p.name)}</h3><p>${esc(p.company||'Organisation non renseignée')}</p></div></div><div class="detail-grid"><div class="detail-cell"><span>Catégorie</span><strong>${esc(displayCategory(p.category))}</strong></div><div class="detail-cell"><span>Statut</span><strong>${p.checkedIn?'Arrivée confirmée':'À accueillir'}</strong></div><div class="detail-cell"><span>E-mail</span><strong>${esc(p.email||'—')}</strong></div><div class="detail-cell"><span>Code badge</span><strong>${esc(p.code||'—')}</strong></div><div class="detail-cell"><span>Paiement</span><strong>${esc(paymentStatusNames[pay.status])}${pay.status==='paid'&&pay.amount>0?` · ${esc(money(pay.amount))}`:''}</strong></div><div class="detail-cell"><span>Moyen de paiement</span><strong>${esc(paymentMethodNames[pay.method]||'—')}</strong></div><div class="detail-cell"><span>Référence</span><strong>${esc(pay.reference||'—')}</strong></div>
-<div class="detail-cell"><span>Tarif appliqué</span><strong>${esc(pay.tariff||'—')}</strong></div><div class="detail-cell"><span>Paiement confirmé</span><strong>${pay.at?`${esc(dateTimeLabel(pay.at))}${pay.by?` · ${esc(pay.by)}`:''}`:'—'}</strong></div><div class="detail-cell"><span>Heure d’arrivée</span><strong>${esc(localTime(p.checkedInAt))}</strong></div><div class="detail-cell"><span>Synchronisation</span><strong>${getQueue().some(op=>op.participantId===p.id)?'En attente':'À jour / local'}</strong></div></div>${needsPayment(p)?`<div class="notice warning" style="margin-top:12px">${icon('cash')}<span><strong>Paiement non confirmé.</strong> Encaissement possible au desk avant ou après l’arrivée.</span></div>`:''}</div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-secondary" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('badge')}Voir le badge</button><button class="btn btn-secondary" type="button" data-action="payment" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('cash')}${needsPayment(p)?'Encaisser':'Paiement'}</button>${p.checkedIn?`<button class="btn btn-danger" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler l’arrivée</button>`:`<button class="btn btn-primary" type="button" data-action="checkin" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('check')}Confirmer l’arrivée</button>`}</div>`,true);}
+<div class="detail-cell"><span>Tarif appliqué</span><strong>${esc(pay.tariff||'—')}</strong></div><div class="detail-cell"><span>Paiement confirmé</span><strong>${pay.at?`${esc(dateTimeLabel(pay.at))}${pay.by?` · ${esc(pay.by)}`:''}`:'—'}</strong></div><div class="detail-cell"><span>Heure d’arrivée</span><strong>${esc(localTime(p.checkedInAt))}</strong></div><div class="detail-cell"><span>Synchronisation</span><strong>${getQueue().some(op=>op.participantId===p.id)?'En attente':'À jour / local'}</strong></div></div>${needsPayment(p)?`<div class="notice warning" style="margin-top:12px">${icon('cash')}<span><strong>Paiement non confirmé.</strong> Encaissement possible au desk avant ou après l’arrivée.</span></div>`:''}</div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('trash')}Corbeille</button><button class="btn btn-secondary" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('badge')}Voir le badge</button><button class="btn btn-secondary" type="button" data-action="payment" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('cash')}${needsPayment(p)?'Encaisser':'Paiement'}</button>${p.checkedIn?`<button class="btn btn-danger" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler l’arrivée</button>`:`<button class="btn btn-primary" type="button" data-action="checkin" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('check')}Confirmer l’arrivée</button>`}</div>`,true);}
 
 function paymentMethodOptions(selected){return PAYMENT_METHOD_OPTIONS.map(key=>`<option value="${key}" ${selected===key?'selected':''}>${esc(paymentMethodNames[key])}</option>`).join('');}
 function openPaymentModal(id,options={}){
@@ -437,7 +450,7 @@ function openBadgeModal(id){
   const back=badgeHasBack(model)?`<div class="field-hint" style="margin:14px 0 6px;text-align:center">Verso</div><div class="modal-badge">${badgeFrame(person,model,'back')}</div>`:'';
   openModal(`<div class="modal-head"><div><h2>Aperçu du badge</h2><p>Modèle « ${esc(model?.name||'Modèle de test')} » · ${format}${back?' · recto-verso':''}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="modal-badge">${badgeFrame(person,model,'front')}</div>${back}<div class="field-hint" style="margin-top:11px;text-align:center">${model?.qrMode==='url'?`QR code : ${esc(qrPayload(person,model))}`:'Le QR code contient la référence du badge'} · rendu à l’échelle de l’impression.</div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-secondary" type="button" data-action="badge-studio">${icon('file')}Modifier le modèle</button><button class="btn btn-primary" type="button" data-action="print-badge" data-id="${esc(person.id)}">${icon('printer')}Imprimer</button></div>`,true);
 }
-function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
+function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>Corbeille, en cas d’erreur</strong><br>Cochez un ou plusieurs inscrits, puis <em>Mettre à la corbeille</em> : ils quittent la liste, les compteurs et les badges sans être perdus. Le bouton <em>Corbeille</em> les restaure tels quels ; seul l’administrateur peut les effacer définitivement.</div></div><div class="guide-step"><b>8</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
 async function openAccountsModal(){
   if(authUser?.role!=='admin'){showToast('Seul l’administrateur peut gérer les comptes.');return;}
   let storage=null;
@@ -1309,6 +1322,174 @@ function printBadge(id){
   openPrintModal([person],'un badge');
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Corbeille des inscrits : suppression réversible, restauration et
+   effacement définitif (réservé aux administrateurs).
+   ═══════════════════════════════════════════════════════════════════ */
+let peopleSelection=new Set();
+function selectedPeople(){return getPeople().filter(person=>peopleSelection.has(String(person.id)));}
+function pruneSelection(){const existing=new Set(getPeople().map(person=>String(person.id)));peopleSelection=new Set([...peopleSelection].filter(id=>existing.has(id)));}
+function trashCount(eventId=store.activeEventId){return Number(store.trashCountByEvent?.[eventId]||0);}
+function setTrashCount(eventId,count){store.trashCountByEvent=store.trashCountByEvent||{};store.trashCountByEvent[eventId]=Math.max(0,Number(count||0));}
+function refreshSelectionBar(){
+  const bar=$('#selectionBar');
+  if(!bar)return;
+  const total=selectedPeople().length;
+  bar.hidden=total===0;
+  const label=$('#selectionCount');
+  if(label)label.textContent=`${total} inscrit${total===1?'':'s'} sélectionné${total===1?'':'s'}`;
+  const master=$('#peopleSelectAll');
+  if(master)master.checked=total>0&&total===filteredPeople().length;
+}
+function togglePersonSelection(id,checked,box){
+  const key=String(id);
+  if(checked)peopleSelection.add(key);else peopleSelection.delete(key);
+  const row=box?.closest?.('tr');
+  if(row)row.classList.toggle('row-selected',!!checked);
+  refreshSelectionBar();
+}
+function selectAllVisible(checked){
+  const list=filteredPeople();
+  if(checked)list.forEach(person=>peopleSelection.add(String(person.id)));
+  else peopleSelection.clear();
+  $$('#peopleRows [data-select-id]').forEach(box=>{box.checked=checked;});
+  refreshSelectionBar();
+}
+function canPurge(){return authUser?.role==='admin';}
+function requireOnline(){
+  if(navigator.onLine)return true;
+  showToast('Connexion au serveur nécessaire pour modifier la liste des inscrits.');
+  return false;
+}
+function dropFromStore(eventId,ids){
+  const drop=new Set((ids||[]).map(String));
+  if(!drop.size)return;
+  store.peopleByEvent[eventId]=(store.peopleByEvent[eventId]||[]).filter(person=>!drop.has(String(person.id)));
+  store.queueByEvent[eventId]=(store.queueByEvent[eventId]||[]).filter(op=>!drop.has(String(op.participantId)));
+  peopleSelection=new Set([...peopleSelection].filter(id=>!drop.has(id)));
+}
+async function loadTrash(silent=true){
+  const event=getEvent();
+  if(!event||!navigator.onLine)return store.trashByEvent?.[store.activeEventId]||[];
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/participants?trash=1`);
+    store.trashByEvent=store.trashByEvent||{};
+    store.trashByEvent[event.id]=Array.isArray(data.participants)?data.participants:[];
+    setTrashCount(event.id,data.trashCount??store.trashByEvent[event.id].length);
+    saveStore();
+    return store.trashByEvent[event.id];
+  }catch(error){
+    if(!silent)showToast(error.message||'Impossible de charger la corbeille.');
+    return [];
+  }
+}
+async function trashPeople(ids){
+  const event=getEvent();
+  if(!event)return false;
+  const list=(ids||[]).map(String).filter(Boolean);
+  if(!list.length)return false;
+  if(event.status==='archived'){showToast('Ce congrès est archivé. Réactivez-le pour supprimer des inscrits.');return false;}
+  if(!requireOnline())return false;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/participants/trash`,{method:'POST',body:JSON.stringify({ids:list})});
+    dropFromStore(event.id,data.ids||list);
+    setTrashCount(event.id,data.trashCount);
+    store.trashByEvent=store.trashByEvent||{};
+    store.trashByEvent[event.id]=null;
+    saveStore();
+    closeModal();
+    render();
+    showToast(data.already&&!data.moved
+      ? `${data.already} inscrit(s) déjà dans la corbeille.`
+      : `${data.moved} inscrit${data.moved===1?'':'s'} déplacé${data.moved===1?'':'s'} dans la corbeille.`);
+    return true;
+  }catch(error){showToast(error.message||'Suppression impossible.');return false;}
+}
+async function restorePeople(ids){
+  const event=getEvent();
+  if(!event)return false;
+  const list=(ids||[]).map(String).filter(Boolean);
+  if(!list.length){showToast('Sélectionnez au moins un inscrit.');return false;}
+  if(!requireOnline())return false;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/participants/restore`,{method:'POST',body:JSON.stringify({ids:list})});
+    const restored=(data.participants||[]).map(person=>({...person,deletedAt:'',deletedBy:''}));
+    if(restored.length)mergePeople(event.id,restored);
+    setTrashCount(event.id,data.trashCount);
+    const cache=store.trashByEvent?.[event.id];
+    if(Array.isArray(cache))store.trashByEvent[event.id]=cache.filter(person=>!list.includes(String(person.id)));
+    saveStore();
+    render();
+    if(currentPage==='people'&&$('#trashRoot'))await openTrashModal(true);
+    showToast(`${data.restored} inscrit${data.restored===1?'':'s'} restauré${data.restored===1?'':'s'}.`);
+    return true;
+  }catch(error){showToast(error.message||'Restauration impossible.');return false;}
+}
+async function purgePeople(ids,all=false){
+  const event=getEvent();
+  if(!event)return false;
+  if(!canPurge()){showToast('Seul un administrateur peut effacer définitivement des inscrits.');return false;}
+  if(!requireOnline())return false;
+  const list=(ids||[]).map(String).filter(Boolean);
+  if(!all&&!list.length)return false;
+  try{
+    const body=all?{all:true}:{ids:list};
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/participants/purge`,{method:'POST',body:JSON.stringify(body)});
+    setTrashCount(event.id,data.trashCount);
+    const cache=store.trashByEvent?.[event.id];
+    store.trashByEvent=store.trashByEvent||{};
+    store.trashByEvent[event.id]=all?[]:(Array.isArray(cache)?cache.filter(person=>!list.includes(String(person.id))):null);
+    saveStore();
+    closeModal();
+    render();
+    if($('#trashRoot')||currentPage==='people')openTrashModal(true);
+    showToast(`${data.purged} inscrit${data.purged===1?'':'s'} effacé${data.purged===1?'':'s'} définitivement.`);
+    return true;
+  }catch(error){showToast(error.message||'Effacement impossible.');return false;}
+}
+function trashPreviewList(people){
+  return `<ul class="trash-list">${people.slice(0,8).map(person=>`<li><strong>${esc(person.name)}</strong><span>${esc(person.code||'—')} · ${esc(displayCategory(person.category))}</span></li>`).join('')}${people.length>8?`<li class="more">et ${people.length-8} autre(s)…</li>`:''}</ul>`;
+}
+function openTrashConfirm(ids){
+  const people=getPeople().filter(person=>(ids||[]).map(String).includes(String(person.id)));
+  if(!people.length){showToast('Sélectionnez au moins un inscrit.');return;}
+  const event=getEvent();
+  if(event?.status==='archived'){showToast('Ce congrès est archivé. Réactivez-le pour supprimer des inscrits.');return;}
+  openModal(`<div class="modal-head"><div><h2>Mettre à la corbeille</h2><p>${people.length} inscrit${people.length===1?'':'s'} · ${esc(event?.name||'')}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body">
+    ${trashPreviewList(people)}
+    <div class="notice">${icon('info')}<span>Les inscrits quittent la liste, les compteurs, les badges et l’export. <strong>Rien n’est perdu</strong> : ils restent dans la <em>corbeille</em> du congrès et peuvent être restaurés à tout moment.</span></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-danger" type="button" data-action="trash-do" data-ids="${esc(ids.join(','))}">${icon('trash')}Mettre à la corbeille</button></div>`,true);
+}
+async function openTrashModal(refresh=false){
+  const event=getEvent();
+  if(!event)return;
+  const list=refresh?await loadTrash(false):(Array.isArray(store.trashByEvent?.[event.id])?store.trashByEvent[event.id]:await loadTrash(false));
+  const people=Array.isArray(list)?list:[];
+  const admin=canPurge();
+  const rows=people.length?people.map(person=>`<div class="trash-row"><div class="trash-person"><strong>${esc(person.name)}</strong><span>${esc(person.code||'—')} · ${esc(displayCategory(person.category))} · ${esc(person.company||'sans organisation')}</span><small>Supprimé le ${esc(dateTimeLabel(person.deletedAt))}${person.deletedBy?` par ${esc(person.deletedBy)}`:''}</small></div><div class="trash-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="restore-person" data-id="${esc(person.id)}">${icon('rotate',12)}Restaurer</button>${admin?`<button class="icon-action danger" type="button" data-action="purge-person" data-id="${esc(person.id)}" title="Effacer définitivement" aria-label="Effacer définitivement">${icon('trash',13)}</button>`:''}</div></div>`).join(''):`<div class="empty-state"><strong>La corbeille est vide</strong>Aucun inscrit supprimé pour ce congrès.</div>`;
+  openModal(`<div id="trashRoot"><div class="modal-head"><div><h2>Corbeille</h2><p>${people.length} inscrit${people.length===1?'':'s'} supprimé${people.length===1?'':'s'} · ${esc(event.name)}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body">
+    <div class="notice">${icon('info')}<span>Un inscrit dans la corbeille n’apparaît plus dans la liste, les compteurs, les badges ni l’export. <strong>Restaurer</strong> le remet exactement comme avant (arrivée et paiement compris).</span></div>
+    <div class="trash-list-wrap">${rows}</div>
+    ${people.length&&!admin?`<div class="field-hint" style="margin-top:12px">L’effacement définitif est réservé à l’administrateur ; la restauration reste ouverte à tous les comptes.</div>`:''}
+    ${people.length&&admin?`<label class="print-check" style="margin-top:14px"><input id="purgeAllConfirm" type="checkbox"> Je comprends que vider la corbeille efface définitivement ces inscrits</label>`:''}
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button>${people.length&&admin?`<button class="btn btn-danger" type="button" data-action="purge-all" id="purgeAllButton" disabled>${icon('trash')}Vider la corbeille</button>`:''}</div></div>`,true);
+}
+function openPurgeConfirm(ids,all=false){
+  const event=getEvent();
+  if(!event)return;
+  if(!canPurge()){showToast('Seul un administrateur peut effacer définitivement des inscrits.');return;}
+  openModal(`<div class="modal-head"><div><h2>Effacer définitivement</h2><p>${all?'Toute la corbeille':'Inscrit sélectionné'} · ${esc(event.name)}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body">
+    <div class="notice warning">${icon('info')}<span><strong>Cette action est définitive.</strong> Les inscrits et leurs paiements seront retirés de la base : aucune restauration ne sera possible, y compris depuis une sauvegarde plus ancienne.</span></div>
+    <label class="print-check"><input id="purgeConfirm" type="checkbox"> Je comprends et je confirme l’effacement définitif</label>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="open-trash">Annuler</button><button class="btn btn-danger" type="button" data-action="purge-do" data-ids="${esc((ids||[]).join(','))}" data-all="${all?'1':'0'}" id="purgeButton" disabled>${icon('trash')}Effacer définitivement</button></div>`,true);
+}
+
 // Navigation et actions de l’interface.
 document.addEventListener('click',async event=>{
   const page=event.target.closest('[data-page]');if(page){event.preventDefault();setPage(page.dataset.page);return;}
@@ -1355,6 +1536,15 @@ document.addEventListener('click',async event=>{
   else if(action==='print-all'){openPrintModal(filteredBadgePeople(),'tous les badges');return;}
   else if(action==='print-cell'){printStartCell=Number(button.dataset.index)||0;updatePrintSummary();return;}
   else if(action==='details')openDetails(id);
+  else if(action==='open-trash'){await openTrashModal();return;}
+  else if(action==='trash-person'){openTrashConfirm([id]);return;}
+  else if(action==='trash-selected'){const ids=[...peopleSelection];if(!ids.length){showToast('Sélectionnez au moins un inscrit.');return;}openTrashConfirm(ids);return;}
+  else if(action==='trash-do'){await trashPeople(String(button.dataset.ids||'').split(',').filter(Boolean));return;}
+  else if(action==='clear-selection'){peopleSelection.clear();render();return;}
+  else if(action==='restore-person'){await restorePeople([id]);return;}
+  else if(action==='purge-person'){openPurgeConfirm([id]);return;}
+  else if(action==='purge-all'){openPurgeConfirm([],true);return;}
+  else if(action==='purge-do'){await purgePeople(String(button.dataset.ids||'').split(',').filter(Boolean),button.dataset.all==='1');return;}
   else if(action==='badge')openBadgeModal(id);
   else if(action==='print-badge')printBadge(id);
   else if(action==='checkin'){closeModal();await performCheckin(id,'checkin');}
@@ -1366,10 +1556,14 @@ document.addEventListener('click',async event=>{
   else if(action==='sync-now'){await syncQueue();await refreshParticipants(store.activeEventId,true);}
 });
 document.addEventListener('change',async event=>{
+  if(event.target.id==='peopleSelectAll'){selectAllVisible(event.target.checked);return;}
+  if(event.target.matches&&event.target.matches('[data-select-id]')){togglePersonSelection(event.target.dataset.selectId,event.target.checked,event.target);return;}
+  if(event.target.id==='purgeConfirm'){const confirmButton=$('#purgeButton');if(confirmButton)confirmButton.disabled=!event.target.checked;return;}
+  if(event.target.id==='purgeAllConfirm'){const allButton=$('#purgeAllButton');if(allButton)allButton.disabled=!event.target.checked;return;}
   if(event.target.id==='paymentStatus'){const paid=event.target.value==='paid';['paymentAmount','paymentMethod','paymentReference'].forEach(id=>{const field=$('#'+id);if(field)field.disabled=!paid;});}
   if(event.target.matches('[data-user-role]')){const id=event.target.dataset.id,role=event.target.value;try{await api(`/api/users/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({role})});showToast('Rôle mis à jour; ce compte devra se reconnecter.');await openAccountsModal();}catch(error){showToast(error.message||'Modification impossible.');await openAccountsModal();}return;}
   if(event.target.id==='badgeModelSelect'){await setDefaultBadgeTemplate(event.target.value);return;}
-  if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';saveStore();render();if(id){await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id)]);await syncQueue(id);}}
+  if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';peopleSelection.clear();saveStore();render();if(id){await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id)]);await syncQueue(id);}}
   if(event.target.id==='csvFile'){const file=event.target.files?.[0];if(file)await importFile(file);event.target.value='';}
   if(event.target.closest?.('#priceRows')){updatePriceSummary();}
   if(event.target.id==='restoreBackupFileInput'){const file=event.target.files?.[0];const label=$('#restoreBackupFileName');if(label)label.textContent=file?`Fichier choisi : ${file.name} (${(file.size/1024).toFixed(0)} Ko)`:'Choisissez le fichier .zip téléchargé par « Exporter la sauvegarde ».';}
