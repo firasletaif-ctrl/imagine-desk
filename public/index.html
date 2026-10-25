@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#121b32">
+  <meta name="description" content="Imagine Events — gestion multi-congrès du desk d’accueil et des check-ins.">
+  <title>Imagine Events · Desk d’accueil</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="authRoot" aria-live="polite"></div>
+  <div id="appRoot" hidden>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Navigation principale">
+      <a class="brand" href="#" data-page="home" aria-label="Imagine Events, accueil">
+        <span class="brand-mark">IE</span><span class="brand-type"><strong>IMAGINE</strong><small>EVENTS</small></span>
+      </a>
+      <div class="side-label">Espace organisateur</div>
+      <nav class="nav-list">
+        <button class="nav-item active" type="button" data-page="home" title="Vue générale"><span class="nav-icon" data-icon="home"></span><span>Vue générale</span></button>
+        <button class="nav-item" type="button" data-page="people" title="Participants"><span class="nav-icon" data-icon="people"></span><span>Participants</span></button>
+        <button class="nav-item" type="button" data-page="badges" title="Badges"><span class="nav-icon" data-icon="badge"></span><span>Badges</span></button>
+        <button class="nav-item" type="button" data-page="reports" title="Rapports"><span class="nav-icon" data-icon="chart"></span><span>Rapports</span></button>
+        <button class="nav-item" type="button" data-page="events" title="Tous les congrès"><span class="nav-icon" data-icon="calendar"></span><span>Mes congrès</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="side-note"><span class="note-icon">i</span><span><strong>Mode résilient</strong><small>La file hors ligne se synchronise à la reconnexion.</small></span></div>
+        <div class="user-chip"><span class="user-avatar">IE</span><span><strong>Imagine Events</strong><small>Desk d’accueil</small></span><span class="user-dot"></span></div>
+      </div>
+    </aside>
+
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <span class="crumb-brand">Imagine Events</span><span class="crumb-sep">/</span>
+          <select id="eventSelect" class="event-select" aria-label="Choisir un congrès" disabled><option value="">Aucun congrès sélectionné</option></select>
+        </div>
+        <div class="topbar-right">
+          <span class="user-identity" id="userIdentity"></span>
+          <div class="sync-status" id="syncStatus" aria-live="polite"><i></i><span>Connexion en cours…</span></div>
+          <button class="btn btn-secondary btn-sm" id="accountsButton" type="button" data-action="accounts" hidden>Comptes</button>
+          <button class="btn btn-secondary btn-sm password-button" id="passwordButton" type="button" data-action="own-password">Mot de passe</button>
+          <button class="icon-button" id="settingsButton" type="button" data-action="settings" aria-label="Paramètres du congrès" title="Paramètres"><span data-icon="settings"></span></button>
+          <button class="top-add" id="newEventButton" type="button" data-action="new-event"><span data-icon="plus"></span><span>Nouveau congrès</span></button>
+          <button class="btn btn-secondary btn-sm logout-button" id="logoutButton" type="button" data-action="logout">Quitter</button>
+        </div>
+      </header>
+
+      <main>
+        <div id="pageHead" class="page-heading"></div>
+        <section id="appContent" aria-live="polite"></section>
+      </main>
+      <footer class="main-footer"><span>Imagine Events · Desk d’accueil</span><span id="footerSync">Les données restent séparées par congrès.</span></footer>
+    </div>
+  </div>
+  </div>
+  <div id="modalRoot"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input id="csvFile" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+  <input id="databaseBackupFile" type="file" accept=".sqlite3,.sqlite,.db,application/vnd.sqlite3,application/x-sqlite3" hidden>
+  <div id="printArea" aria-hidden="true"></div>
+  <noscript>Activez JavaScript pour utiliser le desk d’accueil.</noscript>
+</body>
+</html>
