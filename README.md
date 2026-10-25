@@ -71,8 +71,9 @@ L’interface suit la charte **Imagine Events** (celle du site `i-maginevents.co
 | Bleu institutionnel | `#13294B` / `#1E4D8C` (dégradés, liens, états actifs) |
 | Rouge de marque | `#C41E3A` (accent, action « Nouveau congrès », repère de navigation) |
 | Fonds | `#F4F7FB` (page) et `#FFFFFF` (cartes) |
-| Titres | **Playfair Display** (serif) — titres de page, cartes, chiffres clés |
+| Titres | **Plus Jakarta Sans** (linéale) — titres de page, cartes, chiffres clés |
 | Texte | **Inter** — corps en 17 px, tableaux en 16,5 px, plus petite taille 12 px |
+| Polices | chargées depuis Google Fonts avec repli système (`Segoe UI`, `system-ui`) |
 
 Le logo officiel est dans `public/img/logo.png` (fond transparent) et `logo-chip.png`.
 Les polices sont chargées depuis Google Fonts ; hors ligne, l’application retombe sur les polices

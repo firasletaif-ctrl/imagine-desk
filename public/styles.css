@@ -55,7 +55,7 @@ main{width:100%;max-width:1530px;margin:0 auto;padding:38px 41px 51px;flex:1}.pa
 /* ═════════════════════════════════════════════════════════════════════
    CHARTE IMAGINE EVENTS
    Bleu profond #0B1D3A / #13294B · Rouge #C41E3A · Blanc
-   Titres : Playfair Display — Texte : Inter
+   Titres : Plus Jakarta Sans — Texte : Inter
    ═════════════════════════════════════════════════════════════════════ */
 :root{
   --navy:#0B1D3A;--navy2:#13294B;--ink:#13294B;--muted:#5A6B85;
@@ -68,7 +68,7 @@ main{width:100%;max-width:1530px;margin:0 auto;padding:38px 41px 51px;flex:1}.pa
   --rose:#C41E3A;--rose-soft:#FDE8EC;
   --shadow:0 14px 34px rgba(11,29,58,.07);--radius:16px;
   --font-body:'Inter',ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  --font-display:'Playfair Display',Georgia,'Times New Roman',serif;
+  --font-display:'Plus Jakarta Sans','Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
 }
 html,body{font-family:var(--font-body);color:var(--ink);background:var(--canvas);font-size:17px;line-height:1.55;-webkit-text-size-adjust:100%}
 button,input,select,textarea{font-family:inherit}
@@ -266,3 +266,14 @@ td{font-size:16.5px}
   .brand-type small{font-size:12px}
   .page-heading h1{font-size:28px}
 }
+
+/* ── Titres en linéale (Plus Jakarta Sans) : graisse et approche adaptées ── */
+.page-heading h1{font-weight:800;letter-spacing:-.03em}
+.auth-card h1{font-weight:800;letter-spacing:-.03em}
+.event-hero h2{font-weight:700;letter-spacing:-.025em}
+.event-card-title h3{font-weight:700;letter-spacing:-.02em}
+.modal-head h2{font-weight:700;letter-spacing:-.025em}
+.card-title{font-weight:700;letter-spacing:-.015em}
+.onboarding h2{font-weight:700;letter-spacing:-.025em}
+.db-backup-panel h3{font-weight:700;letter-spacing:-.015em}
+.stat-value{font-weight:800;letter-spacing:-.03em}
