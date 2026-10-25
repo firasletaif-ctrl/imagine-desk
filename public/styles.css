@@ -50,3 +50,4 @@ main{width:100%;max-width:1530px;margin:0 auto;padding:31px 34px 42px;flex:1}.pa
 .mini-stat strong.money{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:1120px){.stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:620px){.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-summary.four{grid-template-columns:repeat(2,minmax(0,1fr))}.pay-total{width:100%;justify-content:center}}
+.storage-path{display:inline-block;max-width:100%;padding:2px 5px;border-radius:5px;color:#3f5a70;background:#eef4f3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;overflow-wrap:anywhere}
