@@ -1,6 +1,6 @@
 # Imagine Events — Desk d’accueil multi-congrès
 
-Prototype web réutilisable pour gérer plusieurs congrès, importer des participants depuis CSV et Excel (.xlsx), confirmer les arrivées, imprimer des badges et exporter les rapports. Il inclut maintenant des comptes d’accès pour l’équipe. L’interface utilise JavaScript natif; le serveur utilise Python, SQLite et `openpyxl`.
+Prototype web réutilisable pour gérer plusieurs congrès, importer des participants depuis CSV et Excel (.xlsx), confirmer les arrivées **et les paiements**, imprimer des badges et exporter les rapports. Il inclut maintenant des comptes d’accès pour l’équipe. L’interface utilise JavaScript natif; le serveur utilise Python, SQLite et `openpyxl`.
 
 ## Test local
 
@@ -19,7 +19,7 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 ## Comptes et permissions
 
 - **Administrateur** : crée et archive les congrès, importe les listes, gère les comptes et les mots de passe.
-- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées et ajoute un participant au desk.
+- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements et ajoute un participant au desk.
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
 - Les mots de passe ne doivent pas être partagés. Au premier test dans l’aperçu, utilisez un mot de passe provisoire, pas votre mot de passe personnel.
 
@@ -27,11 +27,23 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 
 Dans « Participants », choisissez « Importer CSV / Excel », puis votre fichier. Le CSV accepte les séparateurs virgule ou point-virgule. Pour Excel, utilisez un classeur `.xlsx` : l’application lit la première feuille. Les anciens fichiers `.xls` doivent être enregistrés en `.xlsx`.
 
-Colonnes reconnues : nom complet (ou prénom + nom), e-mail, organisation/entreprise, catégorie, code badge et statut. Les doublons sont rapprochés par e-mail ou code badge. Modèle Excel : `public/modele-import-participants.xlsx`; l’application propose aussi les modèles CSV et Excel.
+Colonnes reconnues : nom complet (ou prénom + nom), e-mail, organisation/entreprise, catégorie, code badge, statut de présence et, en option, `Paiement` (Payé / Non payé / Exonéré), `Montant` et `Moyen de paiement`. Une cellule de paiement vide ne modifie pas un paiement déjà confirmé; renseigner une ligne l’écrase explicitement. Les doublons sont rapprochés par e-mail ou code badge. Modèle Excel : `public/modele-import-participants.xlsx`; l’application propose aussi les modèles CSV et Excel.
+
+## Confirmation des paiements
+
+Chaque congrès possède une devise (TND par défaut, modifiable dans ses paramètres). Depuis la liste des participants, la colonne **Paiement** (ou la fiche de l’inscrit) ouvre une fenêtre de confirmation :
+
+- **Payé** : montant encaissé (3 décimales maximum), moyen de paiement (espèces, carte, virement, chèque, paiement mobile, autre) et référence/justificatif facultative.
+- **Exonéré** : invité, intervenant ou membre dispensé de paiement; aucun montant n’est compté.
+- **Non payé** : annule une confirmation précédente (montant et référence sont effacés).
+
+Chaque confirmation est horodatée et enregistrée au nom de l’agent connecté; les autres postes reçoivent le changement en quelques secondes. En cas de coupure, la confirmation rejoint la file locale du navigateur puis est synchronisée automatiquement. Le desk peut toujours confirmer les arrivées : un avertissement rappelle simplement qu’un inscrit n’a pas de paiement confirmé, sans bloquer l’accueil.
+
+Le tableau de bord affiche le nombre de paiements confirmés et le montant encaissé, l’onglet **Rapports** détaille les encaissements (statut, montant, moyen, référence, date, agent) et l’export CSV contient le détail du paiement pour chaque inscrit. Les paiements sont inclus dans les sauvegardes SQLite exportées depuis **Comptes**.
 
 ## Plusieurs postes et mode de secours
 
-Les événements et les inscrits sont enregistrés séparément dans `data/imagine_desk.sqlite3`. Les postes connectés au même serveur reçoivent les check-ins des autres desks en quelques secondes. Chaque navigateur conserve aussi un cache local; les check-ins et les ajouts individuels faits pendant une coupure sont mis en file, puis synchronisés au retour de la connexion. Pour le secours hors ligne, ouvrez d’abord l’application et chargez la liste sur chaque appareil, puis gardez l’onglet ouvert. L’import de fichiers CSV/Excel nécessite une connexion au serveur. Le cache local contient des données de participants : utilisez des appareils de confiance et déconnectez-vous en fin de service (la file en attente est conservée jusqu’à sa synchronisation).
+Les événements et les inscrits sont enregistrés séparément dans `data/imagine_desk.sqlite3`. Les postes connectés au même serveur reçoivent les check-ins des autres desks en quelques secondes. Chaque navigateur conserve aussi un cache local; les check-ins, les confirmations de paiement et les ajouts individuels faits pendant une coupure sont mis en file, puis synchronisés au retour de la connexion. Pour le secours hors ligne, ouvrez d’abord l’application et chargez la liste sur chaque appareil, puis gardez l’onglet ouvert. L’import de fichiers CSV/Excel nécessite une connexion au serveur. Le cache local contient des données de participants : utilisez des appareils de confiance et déconnectez-vous en fin de service (la file en attente est conservée jusqu’à sa synchronisation).
 
 ## Déploiement Render
 
