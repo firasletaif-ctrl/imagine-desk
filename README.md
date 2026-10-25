@@ -19,7 +19,7 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 ## Comptes et permissions
 
 - **Administrateur** : crée et archive les congrès, importe les listes, gère les comptes et les mots de passe.
-- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements et ajoute un participant au desk.
+- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire du congrès) et ajoute un participant au desk.
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
 - Les mots de passe ne doivent pas être partagés. Au premier test dans l’aperçu, utilisez un mot de passe provisoire, pas votre mot de passe personnel.
 
@@ -28,6 +28,36 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 Dans « Participants », choisissez « Importer CSV / Excel », puis votre fichier. Le CSV accepte les séparateurs virgule ou point-virgule. Pour Excel, utilisez un classeur `.xlsx` : l’application lit la première feuille. Les anciens fichiers `.xls` doivent être enregistrés en `.xlsx`.
 
 Colonnes reconnues : nom complet (ou prénom + nom), e-mail, organisation/entreprise, catégorie, code badge, statut de présence et, en option, `Paiement` (Payé / Non payé / Exonéré), `Montant` et `Moyen de paiement`. Une cellule de paiement vide ne modifie pas un paiement déjà confirmé; renseigner une ligne l’écrase explicitement. Les doublons sont rapprochés par e-mail ou code badge. Modèle Excel : `public/modele-import-participants.xlsx`; l’application propose aussi les modèles CSV et Excel.
+
+## Grille tarifaire par congrès
+
+Chaque congrès a sa propre grille, avec **autant de lignes que nécessaire** et **plusieurs tarifs
+par catégorie** — indispensable quand l’hébergement diffère d’un inscrit à l’autre :
+
+| Libellé | Catégorie | Montant |
+|---|---|---|
+| Participant — 2 nuits d’hôtel | Participant | 450 |
+| Participant — 1 nuit d’hôtel | Participant | 300 |
+| Participant — sans hébergement | Participant | 150 |
+| Étudiant — sans hébergement | Participant | 80 |
+| Intervenant | Intervenant | 0 |
+
+**Paramètres du congrès → Grille tarifaire** : ajouter une ligne, retirer, réordonner, activer ou
+désactiver un tarif (un tarif désactivé n’apparaît plus au desk mais reste dans l’historique). Le bouton
+*Modèle hébergement* crée les trois lignes « 2 nuits / 1 nuit / sans hébergement » à compléter. La
+grille est enregistrée sur le serveur, puis mise en cache sur chaque poste : elle reste disponible
+hors ligne. **Tous les comptes** (administrateur et agent desk) peuvent la consulter et la modifier.
+
+Au moment du paiement, les tarifs actifs apparaissent en **gros boutons** (ceux de la catégorie de
+l’inscrit d’abord) : un appui choisit le tarif, remplit le montant et passe le statut à « Payé ». Le
+moyen de paiement et la référence restent modifiables, et la saisie d’un montant libre demeure
+possible.
+
+**Modifier la grille ne change jamais les montants déjà encaissés** : chaque paiement conserve son
+montant et le libellé du tarif appliqué (visible dans la fiche de l’inscrit, le rapport et l’export
+CSV). L’onglet **Rapports** ajoute une ventilation *Encaissements par tarif* et signale les tarifs
+actifs encore inutilisés. La grille est incluse dans la sauvegarde `.zip` (`05_event_prices.csv`) et
+restaurée avec le reste ; les anciennes sauvegardes, qui n’en contiennent pas, restent valides.
 
 ## Confirmation des paiements
 
@@ -39,7 +69,7 @@ Chaque congrès possède une devise (TND par défaut, modifiable dans ses param�
 
 Chaque confirmation est horodatée et enregistrée au nom de l’agent connecté; les autres postes reçoivent le changement en quelques secondes. En cas de coupure, la confirmation rejoint la file locale du navigateur puis est synchronisée automatiquement. Le desk peut toujours confirmer les arrivées : un avertissement rappelle simplement qu’un inscrit n’a pas de paiement confirmé, sans bloquer l’accueil.
 
-Le tableau de bord affiche le nombre de paiements confirmés et le montant encaissé, l’onglet **Rapports** détaille les encaissements (statut, montant, moyen, référence, date, agent) et l’export CSV contient le détail du paiement pour chaque inscrit. Les paiements sont inclus dans la sauvegarde `.zip` exportée depuis **Comptes**.
+Le tableau de bord affiche le nombre de paiements confirmés et le montant encaissé, l’onglet **Rapports** détaille les encaissements (statut, montant, tarif, moyen, référence, date, agent) et l’export CSV contient le détail du paiement pour chaque inscrit. Les paiements sont inclus dans la sauvegarde `.zip` exportée depuis **Comptes**.
 
 ## Plusieurs postes et mode de secours
 

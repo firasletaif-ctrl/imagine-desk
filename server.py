@@ -107,7 +107,7 @@ def redact_database_url(url: str = "") -> str:
 # Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
 # chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
 BACKUP_FORMAT = "imagine-events-desk-backup"
-BACKUP_VERSION = 2
+BACKUP_VERSION = 3
 BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
 
 # (préfixe du fichier, table, colonnes exportées dans cet ordre)
@@ -116,27 +116,33 @@ BACKUP_TABLES = [
     ("02_users", "users", ["id", "username", "password_salt", "password_hash", "role", "active", "created_at", "updated_at"]),
     ("03_participants", "participants", [
         "id", "event_id", "name", "email", "company", "category", "code", "checked_in_at",
-        "payment_status", "payment_amount", "payment_method", "payment_reference",
+        "payment_status", "payment_amount", "payment_method", "payment_reference", "payment_tariff",
         "payment_confirmed_at", "payment_confirmed_by", "created_at", "updated_at",
     ]),
     ("04_sync_operations", "sync_operations", ["op_id", "event_id", "participant_id", "action", "result_json", "created_at"]),
+    ("05_event_prices", "event_prices", [
+        "id", "event_id", "label", "category", "amount", "active", "sort_order", "created_at", "updated_at",
+    ]),
 ]
 
 # Ordre d’insertion (respecte les clés étrangères).
-BACKUP_INSERT_ORDER = ["events", "users", "participants", "sync_operations"]
+BACKUP_INSERT_ORDER = ["events", "users", "event_prices", "participants", "sync_operations"]
 
 # Ordre de suppression (inverse).
-BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "users", "events"]
+BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "event_prices", "users", "events"]
 
 # Colonnes nulles dans le schéma : une cellule vide devient NULL à la restauration.
-BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at"}, "events": set(), "users": set(), "sync_operations": set()}
-BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": set(), "sync_operations": set()}
+BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at"}, "events": set(), "users": set(),
+                   "sync_operations": set(), "event_prices": set()}
+BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": set(), "sync_operations": set(),
+                          "event_prices": {"active", "sort_order"}}
 
 BACKUP_INSTRUCTIONS = """SAUVEGARDE COMPLETE - Imagine Events Desk
 =========================================
 
-Ce fichier ZIP contient TOUT votre site : congres, inscrits, arrivees,
-paiements et comptes de l'equipe (mots de passe haches, jamais en clair).
+Ce fichier ZIP contient TOUT votre site : congres, grilles tarifaires,
+inscrits, arrivees, paiements et comptes de l'equipe (mots de passe
+haches, jamais en clair).
 Les sessions ouvertes ne sont pas incluses.
 
 POUR RESTAURER (rotation mensuelle de la base Render gratuite)
@@ -153,7 +159,8 @@ POUR RESTAURER (rotation mensuelle de la base Render gratuite)
 
 CE QUI EST REMPLACE
 -------------------
-- Congres, inscrits, arrivees, paiements : remplaces par le contenu du ZIP.
+- Congres, grilles tarifaires, inscrits, arrivees, paiements : remplaces
+  par le contenu du ZIP.
 - Comptes : remplaces par ceux du ZIP ; votre compte actuel est conserve
   s'il n'y figure pas, pour eviter de perdre l'acces.
 - Sessions : toutes fermees (vous restez connecte sur cet appareil).
@@ -401,6 +408,7 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             "payment_reference": clean_text(row.get("payment_reference"), 120) if pay_status == "paid" else "",
             "payment_confirmed_at": pay_confirmed if pay_status != "unpaid" else None,
             "payment_confirmed_by": clean_text(row.get("payment_confirmed_by"), 80) if pay_status != "unpaid" else "",
+            "payment_tariff": clean_text(row.get("payment_tariff"), 120) if pay_status == "paid" else "",
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
         })
         seen_ids.add(person_id)
@@ -425,6 +433,40 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
         })
         seen_ops.add(op_id)
+
+    clean_prices = []
+    seen_price_keys = set()
+    for index, row in enumerate(data.get("event_prices", []) or [], start=1):
+        label = clean_text(row.get("label"), 120)
+        if not label:
+            continue
+        price_event = clean_text(row.get("event_id"), 100)
+        if price_event not in event_ids:
+            raise ValueError(f"Le tarif « {label} » est rattaché à un congrès absent de la sauvegarde.")
+        key = (price_event, label.casefold())
+        if key in seen_price_keys:
+            continue
+        seen_price_keys.add(key)
+        try:
+            amount = clean_amount(row.get("amount"))
+        except ValueError:
+            raise ValueError(f"Tarif « {label} » : montant illisible dans la sauvegarde.") from None
+        try:
+            sort_order = int(str(row.get("sort_order") or index - 1).strip() or index - 1)
+        except ValueError:
+            sort_order = index - 1
+        clean_prices.append({
+            "id": clean_text(row.get("id"), 100) or "prc-" + uuid.uuid4().hex,
+            "event_id": price_event, "label": label,
+            "category": clean_category(row.get("category")),
+            "amount": amount,
+            "active": 1 if str(row.get("active", "1")).strip() in ("1", "true", "oui") else 0,
+            "sort_order": sort_order,
+            "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
+            "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
+        })
+    # Le tarif appliqué à un paiement est conservé tel quel (audit), même si la
+    # grille a changé depuis : il reste une simple étiquette sur l’inscrit.
 
     # ── Écriture en une transaction ──
     con = connect()
@@ -453,6 +495,13 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
                 "INSERT INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                 (user["id"], user["username"], user["password_salt"], user["password_hash"], user["role"],
                  user["active"], user["created_at"], user["updated_at"]),
+            )
+        for price in clean_prices:
+            con.execute(
+                """INSERT INTO event_prices(id,event_id,label,category,amount,active,sort_order,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (price["id"], price["event_id"], price["label"], price["category"], price["amount"],
+                 price["active"], price["sort_order"], price["created_at"], price["updated_at"]),
             )
         now = utc_now()
         session_user_id = None
@@ -492,13 +541,13 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             con.execute(
                 """INSERT INTO participants(
                     id,event_id,name,email,company,category,code,checked_in_at,
-                    payment_status,payment_amount,payment_method,payment_reference,
+                    payment_status,payment_amount,payment_method,payment_reference,payment_tariff,
                     payment_confirmed_at,payment_confirmed_by,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (person["id"], person["event_id"], person["name"], person["email"], person["company"],
                  person["category"], person["code"], person["checked_in_at"], person["payment_status"],
                  person["payment_amount"], person["payment_method"], person["payment_reference"],
-                 person["payment_confirmed_at"], person["payment_confirmed_by"], person["created_at"],
+                 person["payment_tariff"], person["payment_confirmed_at"], person["payment_confirmed_by"], person["created_at"],
                  now),  # force les postes déjà ouverts à recharger la liste restaurée
             )
         for operation in clean_operations:
@@ -517,7 +566,7 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
     return {
         "events": len(clean_events), "users": len(clean_users),
         "participants": len(clean_participants), "syncOperations": len(clean_operations),
-        "sessionUserId": session_user_id,
+        "prices": len(clean_prices), "sessionUserId": session_user_id,
     }
 
 
@@ -804,6 +853,23 @@ SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)",
+    # Grille tarifaire propre à chaque congrès (plusieurs tarifs par catégorie :
+    # « 2 nuits », « 1 nuit », « sans hébergement », early bird, sur place…).
+    """
+    CREATE TABLE IF NOT EXISTS event_prices (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'participant',
+      amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(event_id, label)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_event_prices_event ON event_prices(event_id, sort_order)",
     # Métadonnées locales du serveur (jamais restaurées depuis une sauvegarde).
     """
     CREATE TABLE IF NOT EXISTS app_meta (
@@ -824,6 +890,9 @@ EXPECTED_COLUMNS = {
         ("payment_reference", "TEXT NOT NULL DEFAULT ''"),
         ("payment_confirmed_at", "TEXT"),
         ("payment_confirmed_by", "TEXT NOT NULL DEFAULT ''"),
+        # Libellé du tarif appliqué (grille du congrès), conservé pour l’audit :
+        # modifier la grille ne change jamais les montants déjà encaissés.
+        ("payment_tariff", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -956,6 +1025,91 @@ def parse_payment_status_text(value) -> str:
     return ""
 
 
+MAX_PRICE_LINES = 80
+
+
+def price_json(row) -> dict:
+    return {
+        "id": row["id"], "label": row["label"], "category": row["category"],
+        "amount": round(float(row["amount"] or 0), 3),
+        "active": bool(row["active"]),
+        "sortOrder": int(row["sort_order"] or 0),
+    }
+
+
+def normalize_prices(raw) -> list[dict]:
+    """Valide une grille tarifaire complète sans rien écrire.
+
+    Les lignes sans libellé sont ignorées (lignes vides du formulaire) ; un
+    libellé en double est refusé pour garder une grille lisible au desk.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("La grille tarifaire est invalide.")
+    if len(raw) > MAX_PRICE_LINES:
+        raise ValueError(f"Une grille tarifaire ne peut pas dépasser {MAX_PRICE_LINES} lignes.")
+    prices, seen = [], set()
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        label = clean_text(item.get("label"), 120)
+        if not label:
+            continue
+        if label.casefold() in seen:
+            raise ValueError(f"Le tarif « {label} » apparaît deux fois dans la grille.")
+        seen.add(label.casefold())
+        try:
+            amount = clean_amount(item.get("amount"))
+        except ValueError as exc:
+            raise ValueError(f"Tarif « {label} » : {exc}") from None
+        raw_active = item.get("active", True)
+        active = 1 if raw_active in (True, 1) or str(raw_active).strip().lower() in ("1", "true", "oui", "actif") else 0
+        prices.append({
+            "label": label, "category": clean_category(item.get("category")),
+            "amount": amount, "active": active, "sort_order": index - 1,
+        })
+    return prices
+
+
+def event_prices(event_id: str) -> list[dict]:
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT * FROM event_prices WHERE event_id=? ORDER BY sort_order, label COLLATE NOCASE",
+            (event_id,),
+        ).fetchall()
+        return [price_json(row) for row in rows]
+    finally:
+        con.close()
+
+
+def replace_event_prices(event_id: str, raw) -> list[dict]:
+    """Remplace la grille d’un congrès en une transaction (aucune ligne à moitié écrite)."""
+    prices = normalize_prices(raw)
+    con = connect()
+    try:
+        if not con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone():
+            raise ValueError("Événement introuvable.")
+        now = utc_now()
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DELETE FROM event_prices WHERE event_id=?", (event_id,))
+        for price in prices:
+            con.execute(
+                """INSERT INTO event_prices(id,event_id,label,category,amount,active,sort_order,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                ("prc-" + uuid.uuid4().hex, event_id, price["label"], price["category"],
+                 price["amount"], price["active"], price["sort_order"], now, now),
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return event_prices(event_id)
+
+
 def payment_fields(data, actor_name: str = "") -> dict:
     """Normalise un paiement reçu du client ou d’un import."""
     data = data if isinstance(data, dict) else {}
@@ -963,9 +1117,10 @@ def payment_fields(data, actor_name: str = "") -> dict:
     amount = clean_amount(data.get("amount", data.get("paymentAmount"))) if status == "paid" else 0.0
     method = clean_payment_method(data.get("method", data.get("paymentMethod"))) if status == "paid" else ""
     reference = clean_text(data.get("reference", data.get("paymentReference")), 120) if status == "paid" else ""
+    tariff = clean_text(data.get("tariff", data.get("paymentTariff")), 120) if status == "paid" else ""
     return {
         "status": status, "amount": amount, "method": method,
-        "reference": reference,
+        "reference": reference, "tariff": tariff,
         "confirmed_by": clean_text(actor_name, 80) if status != "unpaid" else "",
     }
 
@@ -979,6 +1134,7 @@ def payment_json(row: sqlite3.Row) -> dict:
         "paymentReference": row["payment_reference"] or "" if "payment_reference" in row.keys() else "",
         "paymentConfirmedAt": row["payment_confirmed_at"] or "" if "payment_confirmed_at" in row.keys() else "",
         "paymentConfirmedBy": row["payment_confirmed_by"] or "" if "payment_confirmed_by" in row.keys() else "",
+        "paymentTariff": (row["payment_tariff"] or "") if "payment_tariff" in row.keys() else "",
     }
 
 
@@ -1488,7 +1644,8 @@ class Handler(BaseHTTPRequestHandler):
             created = manifest.get("createdAt", "")
             message = (
                 f"Sauvegarde restaurée : {counts['events']} congrès, {counts['participants']} inscrits, "
-                f"{counts['users']} comptes, {counts['syncOperations']} actions d’historique."
+                f"{counts['users']} comptes, {counts['prices']} tarifs, "
+                f"{counts['syncOperations']} actions d’historique."
             )
             if created:
                 message += f" Sauvegarde du {clean_text(created, 40)}."
@@ -1683,6 +1840,19 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 con.close()
             return
+        match = re.fullmatch(r"/api/events/([^/]+)/prices", path)
+        if match:
+            event_id = match.group(1)
+            con = connect()
+            try:
+                exists = con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone()
+            finally:
+                con.close()
+            if not exists:
+                self.json(404, {"error": "Événement introuvable."})
+                return
+            self.json(200, {"eventId": event_id, "prices": event_prices(event_id), "serverTime": utc_now()})
+            return
         match = re.fullmatch(r"/api/events/([^/]+)/participants", path)
         if match:
             event_id = match.group(1)
@@ -1796,6 +1966,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             print("POST error:", repr(exc), flush=True)
             self.json(500, {"error":"Erreur interne du serveur."})
+
+    def do_PUT(self):
+        path = unquote(urlparse(self.path).path)
+        try:
+            user = self.require_user()
+            if not user:
+                return
+            match = re.fullmatch(r"/api/events/([^/]+)/prices", path)
+            if not match:
+                self.json(404, {"error": "Route API introuvable."})
+                return
+            self.save_event_prices(match.group(1), self.read_json())
+        except OverflowError as exc:
+            self.json(413, {"error": str(exc)})
+        except ValueError as exc:
+            self.json(400, {"error": str(exc)})
+        except DB_INTEGRITY_ERRORS:
+            self.json(409, {"error": "Conflit de données dans la grille tarifaire."})
+        except Exception as exc:
+            print("PUT error:", repr(exc), flush=True)
+            self.json(500, {"error": "Erreur interne du serveur."})
+
+    def save_event_prices(self, event_id, body):
+        """Enregistre la grille tarifaire d’un congrès (ouvert à tous les comptes)."""
+        con = connect()
+        try:
+            event = con.execute("SELECT status FROM events WHERE id=?", (event_id,)).fetchone()
+        finally:
+            con.close()
+        if not event:
+            self.json(404, {"error": "Événement introuvable."})
+            return
+        if event["status"] == "archived":
+            raise ValueError("Ce congrès est archivé. Réactivez-le pour modifier sa grille tarifaire.")
+        prices = replace_event_prices(event_id, (body or {}).get("prices"))
+        self.json(200, {"ok": True, "eventId": event_id, "prices": prices})
 
     def do_PATCH(self):
         path = unquote(urlparse(self.path).path)
@@ -2172,13 +2378,14 @@ class Handler(BaseHTTPRequestHandler):
                         result={"opId":op_id,"ok":False,"error":str(exc),"participantId":person_id}; results.append(result); continue
                     confirmed_at=now if payment["status"]!="unpaid" else None
                     con.execute("""UPDATE participants SET payment_status=?,payment_amount=?,payment_method=?,payment_reference=?,
-                        payment_confirmed_at=?,payment_confirmed_by=?,updated_at=? WHERE id=?""",(
+                        payment_tariff=?,payment_confirmed_at=?,payment_confirmed_by=?,updated_at=? WHERE id=?""",(
                         payment["status"],payment["amount"],payment["method"],payment["reference"],
-                        confirmed_at,payment["confirmed_by"],now,person_id
+                        payment["tariff"],confirmed_at,payment["confirmed_by"],now,person_id
                     ))
                     changed_ids.append(person_id)
                     result={"opId":op_id,"ok":True,"action":"payment","participantId":person_id,
                             "paymentStatus":payment["status"],"paymentAmount":payment["amount"],
+                            "paymentTariff":payment["tariff"],
                             "paymentConfirmedAt":confirmed_at or ""}
                 else:
                     person=con.execute("SELECT * FROM participants WHERE id=? AND event_id=?",(person_id,event_id)).fetchone()
