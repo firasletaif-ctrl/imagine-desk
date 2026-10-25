@@ -3,11 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#121b32">
+  <meta name="theme-color" content="#0B1D3A">
   <meta name="description" content="Imagine Events — gestion multi-congrès du desk d’accueil et des check-ins.">
+  <meta name="apple-mobile-web-app-title" content="IE Desk">
   <title>Imagine Events · Desk d’accueil</title>
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" sizes="32x32" href="/img/favicon-32.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
@@ -17,7 +22,7 @@
   <div class="shell">
     <aside class="sidebar" aria-label="Navigation principale">
       <a class="brand" href="#" data-page="home" aria-label="Imagine Events, accueil">
-        <span class="brand-mark">IE</span><span class="brand-type"><strong>IMAGINE</strong><small>EVENTS</small></span>
+        <span class="brand-chip"><img class="brand-logo" src="/img/logo.png" alt="Imagine Events"></span><span class="brand-mark-mini" aria-hidden="true">IE</span><span class="brand-type"><strong>DESK D’ACCUEIL</strong><small>Congrès &amp; check-in</small></span>
       </a>
       <div class="side-label">Espace organisateur</div>
       <nav class="nav-list">

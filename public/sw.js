@@ -1,5 +1,5 @@
-const CACHE_NAME = 'imagine-events-desk-shell-v7-backup-zip';
-const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE_NAME = 'imagine-events-desk-shell-v8-charte-imagine';
+const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/img/logo.png', '/img/favicon-32.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).catch(() => {}));
   self.skipWaiting();

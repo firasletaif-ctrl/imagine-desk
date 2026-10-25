@@ -60,6 +60,25 @@ L’application fonctionne avec **SQLite par défaut** (zéro installation) et b
 
 Le moteur réellement utilisé est visible sur `/api/health` (`"storage":"postgres"` ou `"sqlite"`) et dans **Comptes → Où sont mes données**. La sauvegarde depuis **Comptes** produit un fichier `.zip` identique dans les deux moteurs, restaurable depuis le navigateur (voir « Sauvegarder et restaurer » plus bas). Guide Render détaillé : `RENDER-DEMO.md`.
 
+## Charte graphique
+
+L’interface suit la charte **Imagine Events** (celle du site `i-maginevents.com` et de l’application
+`imagine-inventory`) :
+
+| Élément | Valeur |
+|---|---|
+| Bleu profond | `#0B1D3A` (navigation, titres, boutons principaux) |
+| Bleu institutionnel | `#13294B` / `#1E4D8C` (dégradés, liens, états actifs) |
+| Rouge de marque | `#C41E3A` (accent, action « Nouveau congrès », repère de navigation) |
+| Fonds | `#F4F7FB` (page) et `#FFFFFF` (cartes) |
+| Titres | **Playfair Display** (serif) — titres de page, cartes, chiffres clés |
+| Texte | **Inter** — corps en 17 px, tableaux en 16,5 px, plus petite taille 12 px |
+
+Le logo officiel est dans `public/img/logo.png` (fond transparent) et `logo-chip.png`.
+Les polices sont chargées depuis Google Fonts ; hors ligne, l’application retombe sur les polices
+système sans perdre en lisibilité. Toutes les couleurs et polices sont centralisées dans le bloc
+`CHARTE IMAGINE EVENTS` en fin de `public/styles.css` : modifier ce bloc suffit à rethémer l’app.
+
 ## Où sont enregistrées les données
 
 Tout (comptes, congrès, inscrits, arrivées, paiements) est enregistré dans une **base unique** :
