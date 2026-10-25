@@ -1,27 +1,66 @@
-# Déployer l’aperçu sur Render (offre gratuite)
+# Déployer l’aperçu sur Render
 
-Cette configuration sert à une **démo seulement**. La base SQLite est volontairement dans le système de fichiers temporaire du service; les comptes, congrès et participants peuvent disparaître à un redémarrage, une mise en veille ou un redéploiement. Ne pas y importer de vraies listes.
+Deux modes possibles, selon l’objectif :
+
+| Objectif | Base | Durable ? |
+|---|---|---|
+| **Démo publique** (offerte) | SQLite dans le conteneur | ❌ non : perdue à chaque redémarrage / redéploiement |
+| **Vrai congrès** | **PostgreSQL Render** (`DATABASE_URL`) | ✅ oui : survit aux redéploiements et aux mises en veille |
 
 ## Pré-requis du dépôt
 
-Le dépôt connecté à Render doit contenir `render.yaml`, le `Dockerfile`, `server.py`, `requirements.txt` et le dossier `public/`. Utiliser une archive propre, sans `data/imagine_desk.sqlite3`. Si GitHub reste inaccessible, Render accepte également un dépôt GitLab ou Bitbucket.
+Le dépôt connecté à Render doit contenir `render.yaml`, le `Dockerfile`, `server.py`, `requirements.txt`, `alwaysdata_wsgi.py` et le dossier `public/`. Utiliser une archive propre, sans `data/imagine_desk.sqlite3` (ignoré par `.gitignore`).
 
-## Étapes Render
+## Mode recommandé : PostgreSQL Render
 
-1. Dans Render, créer un **Blueprint** depuis le dépôt (ou un Web Service utilisant le `Dockerfile` à la racine).
-2. Au premier déploiement, saisir une valeur aléatoire et longue pour `IMAGINE_SETUP_TOKEN` dans le tableau de bord Render. Ne pas l’ajouter au dépôt ni la partager dans le chat.
-3. Laisser Render construire l’application et attendre que le health check `/api/health` passe.
-4. Ouvrir l’URL `onrender.com` générée, saisir le même code de configuration, puis créer un compte administrateur avec un mot de passe provisoire unique.
-5. Pour que la démo reste active, envoyer une requête périodique est possible, mais cela ne rend pas le stockage persistant; les services gratuits peuvent redémarrer et s’endorment après une période sans trafic.
+L’application utilise **automatiquement PostgreSQL dès que la variable `DATABASE_URL` existe** : les tables sont créées au premier démarrage, et rien d’autre n’est à installer côté serveur (`psycopg2-binary` est dans `requirements.txt`).
 
-Le `render.yaml` configure le plan gratuit, le health check, HTTPS pour le cookie et `IMAGINE_DB_PATH=/tmp/imagine_desk.sqlite3`. Aucune base n’est incluse dans le dépôt.
+### Étapes dans le tableau de bord
 
-## Exporter et restaurer la base
+1. **Créer la base** : *New* → *Postgres* → nom `imagine-events-db`, région identique au web service, plan souhaité.
+2. **Connecter le web service** : ouvrir le service → onglet *Environment* → vérifier que `DATABASE_URL` référence la base (propriété *Internal Database URL*). C’est ce que fait automatiquement le `render.yaml` (`fromDatabase`).
+3. **Redéployer** (*Manual Deploy* → *Deploy latest commit*). Au démarrage, les journaux doivent afficher :
+   ```
+   Base PostgreSQL : postgresql://imagine:***@dpg-…/imagine_events
+   ```
+   et `/api/health` doit répondre `"storage":"postgres"`.
+4. **Créer le premier administrateur** sur l’URL `onrender.com`. Si `IMAGINE_SETUP_TOKEN` est défini, saisir ce code.
+5. Vérifier dans **Comptes → Où sont mes données** : le panneau doit indiquer *PostgreSQL (DATABASE_URL)* et *Base PostgreSQL connectée*.
 
-Dans l’application, connectez-vous comme Admin, ouvrez **Comptes**, puis utilisez **Exporter la base**. Le navigateur télécharge un fichier `.sqlite3`; enregistrez-le régulièrement sur un appareil sûr, en dehors de Render. Render Free n’offre pas de stockage persistant : le bouton ne fait pas de sauvegarde automatique et ne peut pas récupérer des données déjà perdues lors d’un redémarrage.
+> Le premier écran de configuration apparaît parce que la base PostgreSQL est vide. Ce n’est pas une perte de données : SQLite et PostgreSQL sont deux bases distinctes.
 
-Pour restaurer, déployez l’application, créez d’abord un Admin sur la base vide, ouvrez **Comptes > Importer une base**, puis choisissez le fichier exporté ou l’ancienne base SQLite (`.sqlite3`, `.sqlite` ou `.db`, limite 50 Mo). L’import remplace les congrès, participants et historique de synchronisation présents sur le serveur. Les comptes actuellement présents sont conservés; les anciens comptes de l’archive sont ajoutés si leurs identifiants ne font pas conflit. Les sessions ne sont jamais reprises. Avant l’import, exportez la base actuelle, synchronisez les postes et fermez les desks. Le fichier exporté contient les empreintes de mots de passe : protégez-le comme une donnée sensible.
+### Bon à savoir
 
-## Pour une version durable
+- **Offre gratuite Render** : les bases PostgreSQL gratuites **expirent** (ordre de grandeur : 30 jours) et sont alors supprimées. Pour un vrai congrès, prévoir une base payante et exporter une sauvegarde avant chaque événement.
+- **Une seule instance** suffit : PostgreSQL gère plusieurs connexions simultanées, contrairement au fichier SQLite.
+- **Mise en veille** : le service gratuit s’endort après inactivité ; la première requête suivante est plus lente, mais les données restent dans PostgreSQL.
+- **HTTPS** : garder `COOKIE_SECURE=1` (déjà dans `render.yaml`) pour que le cookie de session exige HTTPS.
 
-Render Free ne permet pas d’attacher un disque persistant. Une mise en production sur Render nécessite un service payant avec disque monté, par exemple `/var/data`, et `IMAGINE_DB_PATH=/var/data/imagine_desk.sqlite3`. Le plus petit compute payant est affiché à 7 USD/mois; le disque est facturé séparément à 0,25 USD/Go/mois selon la grille consultée en octobre 2026. Garder une seule instance tant que le stockage est SQLite. Vérifier le prix courant dans le tableau de bord avant toute activation.
+## Sauvegarde et restauration
+
+**Comptes → Sauvegarde de la base → Exporter la base** produit :
+
+- en **PostgreSQL** : un fichier `.sql` (congrès, inscrits, paiements, historique de synchronisation et comptes — les sessions sont exclues, les mots de passe restent hachés) ;
+- en **SQLite** : un fichier `.sqlite3`.
+
+Réimport PostgreSQL, au choix :
+
+```bash
+psql "$DATABASE_URL" -f imagine-events-backup-AAAAMMJJ-HHMMSS.sql
+```
+
+ou *Restore* depuis la page de la base dans Render (selon l’offre). L’import d’un fichier `.sqlite3` depuis l’interface est réservé au stockage SQLite et affiche un message explicite en PostgreSQL.
+
+## Reprendre des données déjà saisies en SQLite
+
+La base SQLite locale n’est **pas** convertible automatiquement en PostgreSQL. Le plus simple, congrès par congrès :
+
+1. sur l’ancienne version, **Rapports → Exporter CSV** ;
+2. sur la version PostgreSQL, **Participants → Importer CSV / Excel** et choisir ce fichier ;
+3. vérifier les colonnes *Paiement*, *Montant* et *Moyen de paiement* dans la liste, puis recréer les comptes de l’équipe dans **Comptes**.
+
+Limites connues de ce transfert : l’heure d’arrivée et la référence de paiement ne sont pas reprises par l’import (le statut, le montant et le moyen le sont).
+
+## Mode démo sans base (offerte)
+
+Sans `DATABASE_URL`, le service retombe sur SQLite (chemin `IMAGINE_DB_PATH`). Sur Render, le disque du conteneur est éphémère : la base peut disparaître à un redémarrage, une mise en veille ou un redéploiement. **Ne pas y importer de vraies listes.** Le serveur affiche un avertissement au démarrage et l’administrateur voit un bandeau orange dans **Comptes**.

@@ -13,6 +13,7 @@ et ne doit contenir aucune donnée réelle.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -46,8 +47,12 @@ def main() -> int:
     parser.add_argument("--reset", action="store_true", help="supprime les données existantes avant de recréer la démo")
     args = parser.parse_args()
 
-    server.DB_PATH = Path(__import__("os").environ.get("IMAGINE_DB_PATH") or ROOT / "data" / "imagine_desk.sqlite3")
-    if args.reset:
+    server.DB_PATH = Path(os.environ.get("IMAGINE_DB_PATH") or ROOT / "data" / "imagine_desk.sqlite3")
+    if server.USE_POSTGRES:
+        print("Base PostgreSQL détectée (DATABASE_URL).")
+    if args.reset and server.USE_POSTGRES:
+        print("--reset est ignoré en PostgreSQL : supprimez les lignes depuis psql si nécessaire.")
+    if args.reset and not server.USE_POSTGRES:
         for suffix in ("", "-wal", "-shm"):
             candidate = Path(str(server.DB_PATH) + suffix)
             if candidate.exists():
@@ -70,10 +75,16 @@ def main() -> int:
             created_users += 1
 
         event_id, name, date, venue, currency = DEMO_EVENT
-        con.execute(
-            "INSERT OR IGNORE INTO events(id,name,event_date,venue,status,currency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-            (event_id, name, date, venue, "active", currency, now, now),
-        )
+        values = (event_id, name, date, venue, "active", currency, now, now)
+        columns = "id,name,event_date,venue,status,currency,created_at,updated_at"
+        placeholders = ",".join("?" for _ in values)
+        if server.USE_POSTGRES:
+            con.execute(
+                f"INSERT INTO events ({columns}) VALUES ({placeholders}) ON CONFLICT (id) DO NOTHING",
+                values,
+            )
+        else:
+            con.execute(f"INSERT OR IGNORE INTO events ({columns}) VALUES ({placeholders})", values)
 
         created_people = 0
         for index, (full_name, email, company, category, status, amount, method, reference, hhmm, confirmed_by) in enumerate(DEMO_PEOPLE, start=1):
@@ -94,7 +105,7 @@ def main() -> int:
     finally:
         con.close()
 
-    print(f"Base : {server.DB_PATH}")
+    print(f"Base : {server.db_display_path()}")
     print(f"Comptes créés : {created_users} — Participants créés : {created_people}")
     print("Comptes de démonstration :")
     for _, username, password, role in DEMO_USERS:

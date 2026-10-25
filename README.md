@@ -43,22 +43,35 @@ Le tableau de bord affiche le nombre de paiements confirmés et le montant encai
 
 ## Plusieurs postes et mode de secours
 
-Les événements et les inscrits sont enregistrés séparément dans `data/imagine_desk.sqlite3`. Les postes connectés au même serveur reçoivent les check-ins des autres desks en quelques secondes. Chaque navigateur conserve aussi un cache local; les check-ins, les confirmations de paiement et les ajouts individuels faits pendant une coupure sont mis en file, puis synchronisés au retour de la connexion. Pour le secours hors ligne, ouvrez d’abord l’application et chargez la liste sur chaque appareil, puis gardez l’onglet ouvert. L’import de fichiers CSV/Excel nécessite une connexion au serveur. Le cache local contient des données de participants : utilisez des appareils de confiance et déconnectez-vous en fin de service (la file en attente est conservée jusqu’à sa synchronisation).
+Les événements et les inscrits sont enregistrés séparément dans la base (PostgreSQL, ou `data/imagine_desk.sqlite3` en local). Les postes connectés au même serveur reçoivent les check-ins des autres desks en quelques secondes. Chaque navigateur conserve aussi un cache local; les check-ins, les confirmations de paiement et les ajouts individuels faits pendant une coupure sont mis en file, puis synchronisés au retour de la connexion. Pour le secours hors ligne, ouvrez d’abord l’application et chargez la liste sur chaque appareil, puis gardez l’onglet ouvert. L’import de fichiers CSV/Excel nécessite une connexion au serveur. Le cache local contient des données de participants : utilisez des appareils de confiance et déconnectez-vous en fin de service (la file en attente est conservée jusqu’à sa synchronisation).
+
+## Base de données : SQLite ou PostgreSQL
+
+L’application fonctionne avec **SQLite par défaut** (zéro installation) et bascule **automatiquement sur PostgreSQL dès que la variable `DATABASE_URL` est définie** — c’est le cas sur Render, OVH, Neon, etc. Les tables sont créées au premier démarrage; aucun script de migration n’est à lancer.
+
+| Variable | Effet |
+|---|---|
+| `DATABASE_URL` | `postgresql://…` → stockage PostgreSQL durable (prioritaire) |
+| `IMAGINE_DB_PATH` | chemin du fichier SQLite si `DATABASE_URL` est absent (défaut : `data/imagine_desk.sqlite3`) |
+| `PORT` / `HOST` | écoute du serveur (`0.0.0.0` par défaut) |
+| `COOKIE_SECURE=1` | cookie de session limité à HTTPS (hébergement) |
+| `IMAGINE_SETUP_TOKEN` | code exigé pour créer le premier administrateur |
+
+Le moteur réellement utilisé est visible sur `/api/health` (`"storage":"postgres"` ou `"sqlite"`) et dans **Comptes → Où sont mes données**. La sauvegarde depuis **Comptes** produit un `.sql` en PostgreSQL et un `.sqlite3` en SQLite. Guide Render détaillé : `RENDER-DEMO.md`.
 
 ## Où sont enregistrées les données
 
-Tout (comptes, congrès, inscrits, arrivées, paiements) est enregistré dans **une base SQLite unique** :
+Tout (comptes, congrès, inscrits, arrivées, paiements) est enregistré dans une **base unique** :
 
-```
-data/imagine_desk.sqlite3
-```
+- **PostgreSQL** quand `DATABASE_URL` est défini (mode hébergement recommandé — voir la section précédente) ;
+- sinon **SQLite** dans `data/imagine_desk.sqlite3`.
 
 Le serveur crée ce dossier et ce fichier automatiquement au premier lancement; le chemin exact s’affiche au démarrage et, pour l’administrateur, dans **Comptes → Où sont mes données**. Une variable `IMAGINE_DB_PATH` permet de pointer ailleurs.
 
 **Actualiser la page ne supprime rien** : les participants reviennent depuis la base. En revanche, les données disparaissent si la base est écrite dans un **dossier temporaire** (par exemple `/tmp`), car ce dossier est vidé à chaque redémarrage du serveur ou redéploiement de l’hébergeur. Le serveur affiche alors un avertissement au démarrage et l’administrateur voit un bandeau orange dans **Comptes**. Pour cette raison :
 
 - en local et dans l’aperçu, gardez le chemin par défaut `data/imagine_desk.sqlite3` (dossier du projet, non versionné : voir `.gitignore`);
-- sur un hébergement, montez un **disque persistant** et renseignez `IMAGINE_DB_PATH=/chemin/persistant/imagine_desk.sqlite3`;
+- sur un hébergement, connectez une **base PostgreSQL** (`DATABASE_URL`) — c’est la solution la plus simple et la plus fiable sur Render; à défaut, montez un disque persistant et renseignez `IMAGINE_DB_PATH=/chemin/persistant/imagine_desk.sqlite3`;
 - ne versionnez jamais le fichier `.sqlite3` : il contient des données de participants et les empreintes des mots de passe. Les fichiers `data/`, `*.sqlite3`, `*-wal` et `*-shm` sont ignorés par Git.
 
 Le navigateur conserve aussi un cache local de la liste pour le mode hors ligne. Si vous videz les données du site (« vider le cache »), il suffit de vous reconnecter pour recharger la liste depuis la base.
@@ -76,9 +89,9 @@ Comptes créés : `demo.accueil` / `DemoAccueil2026!` (admin) et `desk.accueil` 
 
 ## Déploiement Render
 
-Le projet contient un `Dockerfile` et un `render.yaml` pour lancer une démo sur Render Free. Instructions détaillées : `RENDER-DEMO.md`. L’offre gratuite a un système de fichiers éphémère et le service peut s’endormir; la base SQLite peut donc être perdue après redémarrage ou redéploiement. **Ne pas y importer de vraies listes.**
+Le projet contient un `Dockerfile` et un `render.yaml` (Blueprint) pour Render. Le fichier crée une **base PostgreSQL `imagine-events-db`** et la relie au service via `DATABASE_URL` : les congrès, inscrits et paiements y sont conservés et survivent aux redéploiements. Instructions détaillées : `RENDER-DEMO.md`.
 
-Pour conserver les données sur Render, il faut un service payant avec disque persistant monté (par exemple `/var/data`) et `IMAGINE_DB_PATH=/var/data/imagine_desk.sqlite3`. Le coût dépend du plan; vérifier la grille Render avant activation. Conserver une seule instance tant que le stockage est SQLite. Pour plusieurs instances, migrer vers PostgreSQL.
+Attention aux offres gratuites : la base PostgreSQL gratuite de Render **expire** (de l’ordre de 30 jours) et est supprimée ensuite; le web service gratuit s’endort après inactivité. Pour un vrai congrès, prévoir les offres payantes correspondantes et exporter une sauvegarde `.sql` avant chaque événement. Sans `DATABASE_URL`, l’application retombe sur SQLite dans le conteneur : les données sont alors perdues à chaque redémarrage, et l’interface le signale explicitement.
 
 Dans **Comptes** (Admin), les boutons **Exporter la base** et **Importer une base** permettent de télécharger une sauvegarde SQLite et de restaurer un ancien fichier `.sqlite3`, `.sqlite` ou `.db` (50 Mo maximum). L’import remplace les congrès/participants, conserve les comptes du serveur et n’importe jamais les sessions. C’est une sauvegarde manuelle : le fichier doit être téléchargé avant la perte des données et gardé hors de Render. Protégez-le, car il contient les empreintes des mots de passe.
 
