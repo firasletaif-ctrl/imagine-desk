@@ -765,8 +765,8 @@ function studioShell(){
         <div class="studio-tabs"><button type="button" class="studio-tab ${studio.side==='front'?'active':''}" data-action="studio-side" data-side="front">Recto</button><button type="button" class="studio-tab ${studio.side==='back'?'active':''}" data-action="studio-side" data-side="back">Verso</button></div>
         <span class="field-hint">Exemple : ${esc(sample.name||'—')} · ${esc(sample.code||'—')}</span>
       </div>
-      <div class="studio-canvas-wrap"><div id="studioCanvas"></div></div>
-      <div class="field-hint studio-tip">Faites glisser un bloc pour le placer. Cliquez dessus pour régler taille, couleur et alignement.</div>
+      <div class="studio-canvas-wrap"><div id="studioCanvas" tabindex="0"></div><div class="studio-pos" id="studioPos" hidden></div></div>
+      <div class="field-hint studio-tip">Glissez un bloc pour le placer (Maj = pas de 1 %), ou ajustez-le finement avec les flèches du clavier. Cliquez pour régler taille, couleur et alignement.</div>
     </div>
     <div class="studio-right">
       <div class="field"><label for="studioModelSelect">Modèle</label><select id="studioModelSelect">${studio.templates.map((item,i)=>`<option value="${i}" ${i===studio.index?'selected':''}>${esc(item.name||('Modèle '+(i+1)))}</option>`).join('')}</select></div>
@@ -833,7 +833,7 @@ function renderStudioProps(){
     <div class="studio-row2"><div class="field"><label for="propSize">Taille (${Math.round(Number(field.size||8)*height/100*10)/10} mm)</label><input id="propSize" type="number" min="1" max="60" step="0.5" value="${Number(field.size||8)}"></div><div class="field"><label for="propWidth">Largeur du bloc (%)</label><input id="propWidth" type="number" min="2" max="100" step="1" value="${Number(field.w||20)}"></div></div>
     <div class="studio-row2"><div class="field"><label for="propWeight">Graisse</label><select id="propWeight">${[300,400,500,600,700,800,900].map(weight=>`<option value="${weight}" ${Number(field.weight||600)===weight?'selected':''}>${weight}</option>`).join('')}</select></div><div class="field"><label for="propAlign">Alignement</label><select id="propAlign">${['left','center','right'].map(align=>`<option value="${align}" ${(field.align||'left')===align?'selected':''}>${align==='left'?'Gauche':align==='center'?'Centré':'Droite'}</option>`).join('')}</select></div></div>
     <div class="studio-row2"><div class="field"><label for="propColor">Couleur</label><input id="propColor" type="color" value="${esc(/^#[0-9a-fA-F]{6}$/.test(field.color||'')?field.color:'#0B1D3A')}"></div><div class="field"><label for="propUpper">Majuscules</label><select id="propUpper"><option value="0" ${!field.uppercase?'selected':''}>Non</option><option value="1" ${field.uppercase?'selected':''}>Oui</option></select></div></div>
-    <div class="field-hint">Position : ${Number(field.x||0).toFixed(1)} % · ${Number(field.y||0).toFixed(1)} %</div>`;
+    <div class="field-hint" id="studioPosHint">Position : ${Number(field.x||0).toFixed(1)} % · ${Number(field.y||0).toFixed(1)} % — ${(Number(field.x||0)/100*Number(studioTemplate()?.format?.width||90)).toFixed(1)} × ${(Number(field.y||0)/100*height).toFixed(1)} mm</div>`;
 }
 function bindStudioEvents(){
   const root=$('#studioRoot');
@@ -859,6 +859,14 @@ function bindStudioEvents(){
       if(id==='propUpper'){field.uppercase=event.target.value==='1'?1:0;renderStudioPreviewOnly();}
     }
   });
+  root.addEventListener('keydown',event=>{
+    if(event.target.closest?.('input,select,textarea'))return;
+    const steps={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
+    const step=steps[event.key];
+    if(!step)return;
+    const factor=event.shiftKey?4:1;
+    if(studioNudge(step[0]*factor,step[1]*factor))event.preventDefault();
+  });
   root.addEventListener('change',async event=>{
     if(event.target.id==='studioModelSelect'){studio.index=Number(event.target.value)||0;studio.selected=0;renderStudio();}
     if(event.target.id==='studioIsDefault'){
@@ -872,38 +880,116 @@ function bindStudioEvents(){
     }
   });
 }
+function markStudioSelection(index){
+  const changed=studio.selected!==index;
+  studio.selected=index;
+  $$('#studioCanvas [data-field]').forEach(node=>{node.classList.toggle('selected',Number(node.dataset.index)===index);});
+  $$('.studio-field-chip').forEach(chip=>chip.classList.toggle('active',Number(chip.dataset.index)===index));
+  /* On ne reconstruit le panneau que si le champ change : aucun saut de mise en page. */
+  if(changed)renderStudioProps();
+}
+const studioRaf=typeof requestAnimationFrame==='function'?requestAnimationFrame:(fn)=>setTimeout(fn,16);
+const studioCancelRaf=typeof cancelAnimationFrame==='function'?cancelAnimationFrame:(id)=>clearTimeout(id);
+function showStudioPos(x,y){
+  const model=studioTemplate();
+  const pill=$('#studioPos');
+  if(!model)return;
+  const width=Number(model.format?.width||90), height=Number(model.format?.height||60);
+  const text=`${(x/100*width).toFixed(1)} × ${(y/100*height).toFixed(1)} mm`;
+  if(pill){pill.hidden=false;pill.textContent=`${text} · ${x.toFixed(1)} % / ${y.toFixed(1)} %`;}
+  const hint=$('#studioPosHint');
+  if(hint)hint.textContent=`Position : ${x.toFixed(1)} % · ${y.toFixed(1)} % — ${text}`;
+}
+function hideStudioPos(){const pill=$('#studioPos');if(pill)pill.hidden=true;}
 function studioDragStart(event,index){
   const model=studioTemplate();
   const face=studioFace();
   if(!model||!face||!face.fields[index])return;
-  const badge=event.currentTarget.closest('.bd');
+  if(typeof event.button==='number'&&event.button>0)return;
+  const node=event.currentTarget;
+  const badge=node.closest?.('.bd');
   if(!badge)return;
-  studio.selected=index;
-  renderStudioPreviewOnly();
-  renderStudioProps();
-  $$('.studio-field-chip').forEach(chip=>chip.classList.toggle('active',Number(chip.dataset.index)===index));
-  const rect=badge.getBoundingClientRect();
-  studio.drag={index,rect,startX:event.clientX,startY:event.clientY,originX:Number(face.fields[index].x||0),originY:Number(face.fields[index].y||0)};
   event.preventDefault();
-  document.addEventListener('pointermove',studioDragMove);
-  document.addEventListener('pointerup',studioDragEnd,{once:true});
+  markStudioSelection(index);
+  const field=face.fields[index];
+  const rect=badge.getBoundingClientRect();
+  studio.drag={
+    index,node,badge,rect,
+    startX:event.clientX,startY:event.clientY,
+    originX:Number(field.x||0),originY:Number(field.y||0),
+    x:Number(field.x||0),y:Number(field.y||0),
+    maxX:Math.max(0,100-Number(field.w||20)),
+    frame:0
+  };
+  node.classList.add('dragging');
+  badge.classList.add('is-dragging');
+  document.body.classList.add('studio-dragging');
+  try{node.setPointerCapture?.(event.pointerId);}catch(error){}
+  try{$('#studioCanvas')?.focus?.({preventScroll:true});}catch(error){}
+  document.addEventListener('pointermove',studioDragMove,{passive:false});
+  document.addEventListener('pointerup',studioDragEnd);
+  document.addEventListener('pointercancel',studioDragEnd);
+  showStudioPos(studio.drag.x,studio.drag.y);
 }
 function studioDragMove(event){
-  if(!studio?.drag)return;
-  const face=studioFace();
-  const field=face?.fields?.[studio.drag.index];
-  if(!field)return;
-  const {rect,startX,startY,originX,originY}=studio.drag;
-  const dx=(event.clientX-startX)/Math.max(rect.width,1)*100;
-  const dy=(event.clientY-startY)/Math.max(rect.height,1)*100;
-  field.x=Math.max(0,Math.min(100-Number(field.w||20),Math.round((originX+dx)*10)/10));
-  field.y=Math.max(0,Math.min(100,Math.round((originY+dy)*10)/10));
-  const node=$(`#studioCanvas [data-field][data-index="${studio.drag.index}"]`);
-  if(node){node.style.left=`${field.x}%`;node.style.top=`${field.y}%`;}
+  const drag=studio?.drag;
+  if(!drag)return;
+  if(event.pointerType!=='touch'&&event.buttons===0){studioDragEnd();return;}
+  if(event.cancelable)event.preventDefault();
+  const dx=(event.clientX-drag.startX)/Math.max(drag.rect.width,1)*100;
+  const dy=(event.clientY-drag.startY)/Math.max(drag.rect.height,1)*100;
+  let x=drag.originX+dx, y=drag.originY+dy;
+  if(event.shiftKey){x=Math.round(x);y=Math.round(y);}
+  drag.x=Math.max(0,Math.min(drag.maxX,x));
+  drag.y=Math.max(0,Math.min(100,y));
+  /* Un seul déplacement par image : le glisser reste fluide même à 120 Hz. */
+  if(!drag.frame)drag.frame=studioRaf(studioDragPaint);
+}
+function studioDragPaint(){
+  const drag=studio?.drag;
+  if(!drag)return;
+  drag.frame=0;
+  const px=(drag.x-drag.originX)/100*drag.rect.width;
+  const py=(drag.y-drag.originY)/100*drag.rect.height;
+  drag.node.style.transform=`translate3d(${px.toFixed(2)}px,${py.toFixed(2)}px,0)`;
+  showStudioPos(drag.x,drag.y);
 }
 function studioDragEnd(){
   document.removeEventListener('pointermove',studioDragMove);
-  if(studio?.drag){studio.drag=null;renderStudioProps();}
+  document.removeEventListener('pointerup',studioDragEnd);
+  document.removeEventListener('pointercancel',studioDragEnd);
+  document.body.classList.remove('studio-dragging');
+  const drag=studio?.drag;
+  if(!drag)return;
+  if(drag.frame)studioCancelRaf(drag.frame);
+  studio.drag=null;
+  const face=studioFace();
+  const field=face?.fields?.[drag.index];
+  if(field){
+    field.x=Math.round(drag.x*10)/10;
+    field.y=Math.round(drag.y*10)/10;
+    drag.node.style.left=`${field.x}%`;
+    drag.node.style.top=`${field.y}%`;
+  }
+  drag.node.style.transform='';
+  drag.node.style.willChange='';
+  drag.node.classList.remove('dragging');
+  drag.badge.classList.remove('is-dragging');
+  hideStudioPos();
+  renderStudioProps();
+}
+function studioNudge(dx,dy){
+  const face=studioFace();
+  if(!face)return false;
+  const field=face.fields[studio.selected];
+  if(!field)return false;
+  const step=0.5;
+  field.x=Math.round(Math.max(0,Math.min(100-Number(field.w||20),Number(field.x||0)+dx*step))*10)/10;
+  field.y=Math.round(Math.max(0,Math.min(100,Number(field.y||0)+dy*step))*10)/10;
+  const node=$(`#studioCanvas [data-field][data-index="${studio.selected}"]`);
+  if(node){node.style.left=`${field.x}%`;node.style.top=`${field.y}%`;}
+  showStudioPos(field.x,field.y);
+  return true;
 }
 function studioAddField(key){
   const face=studioFace();
@@ -1257,7 +1343,7 @@ document.addEventListener('click',async event=>{
   else if(action==='open-event'){store.activeEventId=id;peopleQuery='';peopleFilter='all';badgeQuery='';currentPage='home';saveStore();render();await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id)]);await syncQueue(id);}
   else if(action==='badge-studio'){openBadgeStudio();return;}
   else if(action==='studio-side'){if(studio){studio.side=button.dataset.side==='back'?'back':'front';studio.selected=0;renderStudio();}return;}
-  else if(action==='studio-pick'){if(studio){studio.selected=Number(button.dataset.index)||0;renderStudio();}return;}
+  else if(action==='studio-pick'){if(studio){markStudioSelection(Number(button.dataset.index)||0);}return;}
   else if(action==='studio-add'){studioAddField(button.dataset.key||'text');return;}
   else if(action==='studio-remove'){studioRemoveField();return;}
   else if(action==='studio-new'){studioNew();return;}
