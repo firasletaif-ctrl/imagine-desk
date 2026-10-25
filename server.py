@@ -27,7 +27,7 @@ from http.cookies import SimpleCookie
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 try:  # PostgreSQL n’est nécessaire que si DATABASE_URL est fourni (Render, OVH…).
     import psycopg2
@@ -107,7 +107,7 @@ def redact_database_url(url: str = "") -> str:
 # Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
 # chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
 BACKUP_FORMAT = "imagine-events-desk-backup"
-BACKUP_VERSION = 3
+BACKUP_VERSION = 4
 BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
 
 # (préfixe du fichier, table, colonnes exportées dans cet ordre)
@@ -123,26 +123,30 @@ BACKUP_TABLES = [
     ("05_event_prices", "event_prices", [
         "id", "event_id", "label", "category", "amount", "active", "sort_order", "created_at", "updated_at",
     ]),
+    ("06_badge_templates", "badge_templates", [
+        "id", "event_id", "name", "format_w", "format_h", "front_json", "back_json",
+        "qr_mode", "qr_prefix", "is_default", "created_at", "updated_at",
+    ]),
 ]
 
 # Ordre d’insertion (respecte les clés étrangères).
-BACKUP_INSERT_ORDER = ["events", "users", "event_prices", "participants", "sync_operations"]
+BACKUP_INSERT_ORDER = ["events", "users", "event_prices", "badge_templates", "participants", "sync_operations"]
 
 # Ordre de suppression (inverse).
-BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "event_prices", "users", "events"]
+BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "badge_templates", "event_prices", "users", "events"]
 
 # Colonnes nulles dans le schéma : une cellule vide devient NULL à la restauration.
 BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at"}, "events": set(), "users": set(),
-                   "sync_operations": set(), "event_prices": set()}
+                   "sync_operations": set(), "event_prices": set(), "badge_templates": set()}
 BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": set(), "sync_operations": set(),
-                          "event_prices": {"active", "sort_order"}}
+                          "event_prices": {"active", "sort_order"}, "badge_templates": {"is_default"}}
 
 BACKUP_INSTRUCTIONS = """SAUVEGARDE COMPLETE - Imagine Events Desk
 =========================================
 
 Ce fichier ZIP contient TOUT votre site : congres, grilles tarifaires,
-inscrits, arrivees, paiements et comptes de l'equipe (mots de passe
-haches, jamais en clair).
+modeles de badge (fond et placements), inscrits, arrivees, paiements et
+comptes de l'equipe (mots de passe haches, jamais en clair).
 Les sessions ouvertes ne sont pas incluses.
 
 POUR RESTAURER (rotation mensuelle de la base Render gratuite)
@@ -159,8 +163,8 @@ POUR RESTAURER (rotation mensuelle de la base Render gratuite)
 
 CE QUI EST REMPLACE
 -------------------
-- Congres, grilles tarifaires, inscrits, arrivees, paiements : remplaces
-  par le contenu du ZIP.
+- Congres, grilles tarifaires, modeles de badge, inscrits, arrivees,
+  paiements : remplaces par le contenu du ZIP.
 - Comptes : remplaces par ceux du ZIP ; votre compte actuel est conserve
   s'il n'y figure pas, pour eviter de perdre l'acces.
 - Sessions : toutes fermees (vous restez connecte sur cet appareil).
@@ -465,6 +469,51 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
             "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
         })
+    # Modèles de badge : validés comme à l’enregistrement, au détail près qu’une
+    # ligne illisible est ignorée plutôt que de bloquer toute la restauration.
+    clean_templates = []
+    seen_template_names = set()
+    for index, row in enumerate(data.get("badge_templates", []) or [], start=1):
+        template_event = clean_text(row.get("event_id"), 100)
+        if template_event not in event_ids:
+            continue
+        name = clean_text(row.get("name"), 80) or f"Modèle {index}"
+        if name.casefold() in seen_template_names:
+            continue
+        seen_template_names.add(name.casefold())
+        sides = {}
+        for side in ("front", "back"):
+            try:
+                sides[side] = clean_badge_side(json.loads(row.get(f"{side}_json") or "{}"))
+            except (ValueError, TypeError):
+                sides[side] = {"image": "", "fields": []}
+        qr_mode = clean_text(row.get("qr_mode"), 10).lower()
+        prefix = clean_text(row.get("qr_prefix"), 300)
+        if prefix and not re.match(r"^(https?://|/)", prefix):
+            prefix = ""
+        clean_templates.append({
+            "id": clean_text(row.get("id"), 100) or "btm-" + uuid.uuid4().hex,
+            "event_id": template_event, "name": name,
+            "format_w": round(_clamp(row.get("format_w"), 30, 300, 90), 2),
+            "format_h": round(_clamp(row.get("format_h"), 30, 300, 60), 2),
+            "front_json": json.dumps(sides["front"], ensure_ascii=False, separators=(",", ":")),
+            "back_json": json.dumps(sides["back"], ensure_ascii=False, separators=(",", ":")),
+            "qr_mode": qr_mode if qr_mode in ("code", "url") else "code",
+            "qr_prefix": prefix,
+            "is_default": 1 if str(row.get("is_default", "0")).strip() in ("1", "true", "oui") else 0,
+            "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
+            "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
+        })
+    # Un seul modèle par défaut : le premier trouvé fait foi.
+    default_seen = False
+    for template in clean_templates:
+        if template["is_default"] and not default_seen:
+            default_seen = True
+        else:
+            template["is_default"] = 0
+    if clean_templates and not default_seen:
+        clean_templates[0]["is_default"] = 1
+
     # Le tarif appliqué à un paiement est conservé tel quel (audit), même si la
     # grille a changé depuis : il reste une simple étiquette sur l’inscrit.
 
@@ -502,6 +551,15 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
                    VALUES(?,?,?,?,?,?,?,?,?)""",
                 (price["id"], price["event_id"], price["label"], price["category"], price["amount"],
                  price["active"], price["sort_order"], price["created_at"], price["updated_at"]),
+            )
+        for template in clean_templates:
+            con.execute(
+                """INSERT INTO badge_templates(id,event_id,name,format_w,format_h,front_json,back_json,
+                   qr_mode,qr_prefix,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (template["id"], template["event_id"], template["name"], template["format_w"],
+                 template["format_h"], template["front_json"], template["back_json"],
+                 template["qr_mode"], template["qr_prefix"], template["is_default"],
+                 template["created_at"], template["updated_at"]),
             )
         now = utc_now()
         session_user_id = None
@@ -566,7 +624,8 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
     return {
         "events": len(clean_events), "users": len(clean_users),
         "participants": len(clean_participants), "syncOperations": len(clean_operations),
-        "prices": len(clean_prices), "sessionUserId": session_user_id,
+        "prices": len(clean_prices), "badgeTemplates": len(clean_templates),
+        "sessionUserId": session_user_id,
     }
 
 
@@ -870,6 +929,25 @@ SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_event_prices_event ON event_prices(event_id, sort_order)",
+    # Modèles de badge propres à chaque congrès : fond importé (image) + champs
+    # placés en pourcentage, recto et verso, format libre en millimètres.
+    """
+    CREATE TABLE IF NOT EXISTS badge_templates (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      format_w REAL NOT NULL DEFAULT 90,
+      format_h REAL NOT NULL DEFAULT 60,
+      front_json TEXT NOT NULL DEFAULT '{}',
+      back_json TEXT NOT NULL DEFAULT '{}',
+      qr_mode TEXT NOT NULL DEFAULT 'code',
+      qr_prefix TEXT NOT NULL DEFAULT '',
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_badge_templates_event ON badge_templates(event_id)",
     # Métadonnées locales du serveur (jamais restaurées depuis une sauvegarde).
     """
     CREATE TABLE IF NOT EXISTS app_meta (
@@ -1026,6 +1104,158 @@ def parse_payment_status_text(value) -> str:
 
 
 MAX_PRICE_LINES = 80
+MAX_BADGE_TEMPLATES = 12
+MAX_BADGE_IMAGE = 2_400_000          # caractères de data URL (≈ 1,8 Mo d’image)
+BADGE_FIELDS = {"name", "company", "category", "event", "code", "qr", "text", "logo"}
+BADGE_ALIGNS = {"left", "center", "right"}
+
+
+def _clamp(value, low, high, fallback=0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if number != number:  # NaN
+        return fallback
+    return max(low, min(high, number))
+
+
+def clean_badge_image(value) -> str:
+    """Image de fond : data URL image uniquement, taille plafonnée."""
+    text = clean_text(value, MAX_BADGE_IMAGE + 200)
+    if not text:
+        return ""
+    if len(text) > MAX_BADGE_IMAGE:
+        raise ValueError("L’image du modèle dépasse 1,8 Mo. Utilisez un fichier plus léger (JPEG ou PNG réduit).")
+    if not re.match(r"^data:image/(png|jpeg|jpg|webp|svg\+xml);base64,[A-Za-z0-9+/=\s]+$", text):
+        raise ValueError("Le fond du badge doit être une image PNG, JPEG, WebP ou SVG.")
+    return text
+
+
+def clean_badge_side(raw) -> dict:
+    """Une face de badge : image de fond + champs positionnés (pourcentages)."""
+    raw = raw if isinstance(raw, dict) else {}
+    image = clean_badge_image(raw.get("image"))
+    fields = []
+    for item in (raw.get("fields") or [])[:40]:
+        if not isinstance(item, dict):
+            continue
+        key = clean_text(item.get("key"), 20).lower()
+        if key not in BADGE_FIELDS:
+            continue
+        align = clean_text(item.get("align"), 10).lower()
+        color = clean_text(item.get("color"), 9) or "#0B1D3A"
+        if not re.fullmatch(r"#[0-9a-fA-F]{3,8}", color):
+            color = "#0B1D3A"
+        fields.append({
+            "key": key,
+            "x": round(_clamp(item.get("x"), 0, 99, 5), 2),
+            "y": round(_clamp(item.get("y"), 0, 99, 5), 2),
+            "w": round(_clamp(item.get("w"), 2, 100, 60), 2),
+            "size": round(_clamp(item.get("size"), 1, 60, 8), 2),
+            "weight": int(_clamp(item.get("weight"), 300, 900, 600)),
+            "color": color,
+            "align": align if align in BADGE_ALIGNS else "left",
+            "uppercase": 1 if item.get("uppercase") in (True, 1, "1", "true") else 0,
+            "text": clean_text(item.get("text"), 120),
+        })
+    return {"image": image, "fields": fields}
+
+
+def badge_template_json(row) -> dict:
+    try:
+        front = json.loads(row["front_json"] or "{}")
+    except ValueError:
+        front = {}
+    try:
+        back = json.loads(row["back_json"] or "{}")
+    except ValueError:
+        back = {}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "format": {"width": round(float(row["format_w"] or 90), 2), "height": round(float(row["format_h"] or 60), 2)},
+        "front": front if isinstance(front, dict) else {},
+        "back": back if isinstance(back, dict) else {},
+        "qrMode": row["qr_mode"] if row["qr_mode"] in ("code", "url") else "code",
+        "qrPrefix": row["qr_prefix"] or "",
+        "isDefault": bool(row["is_default"]),
+    }
+
+
+def normalize_badge_templates(raw) -> list[dict]:
+    """Valide la liste complète des modèles d’un congrès avant toute écriture."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("La liste des modèles de badge est invalide.")
+    if len(raw) > MAX_BADGE_TEMPLATES:
+        raise ValueError(f"Un congrès ne peut pas avoir plus de {MAX_BADGE_TEMPLATES} modèles de badge.")
+    templates, seen = [], set()
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = clean_text(item.get("name"), 80) or f"Modèle {index}"
+        if name.casefold() in seen:
+            raise ValueError(f"Le modèle « {name} » existe déjà pour ce congrès.")
+        seen.add(name.casefold())
+        fmt = item.get("format") if isinstance(item.get("format"), dict) else {}
+        width = round(_clamp(fmt.get("width", item.get("width", 90)), 30, 300, 90), 2)
+        height = round(_clamp(fmt.get("height", item.get("height", 60)), 30, 300, 60), 2)
+        qr_mode = clean_text(item.get("qrMode"), 10).lower()
+        prefix = clean_text(item.get("qrPrefix"), 300)
+        if prefix and not re.match(r"^(https?://|/)", prefix):
+            raise ValueError("Le lien du QR code doit commencer par https:// ou /.")
+        templates.append({
+            "name": name,
+            "format_w": width, "format_h": height,
+            "front_json": json.dumps(clean_badge_side(item.get("front")), ensure_ascii=False, separators=(",", ":")),
+            "back_json": json.dumps(clean_badge_side(item.get("back")), ensure_ascii=False, separators=(",", ":")),
+            "qr_mode": qr_mode if qr_mode in ("code", "url") else "code",
+            "qr_prefix": prefix,
+            "is_default": 1 if item.get("isDefault") else 0,
+        })
+    if templates and not any(template["is_default"] for template in templates):
+        templates[0]["is_default"] = 1
+    return templates
+
+
+def badge_templates(event_id: str) -> list[dict]:
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT * FROM badge_templates WHERE event_id=? ORDER BY is_default DESC, name COLLATE NOCASE",
+            (event_id,),
+        ).fetchall()
+        return [badge_template_json(row) for row in rows]
+    finally:
+        con.close()
+
+
+def replace_badge_templates(event_id: str, raw) -> list[dict]:
+    templates = normalize_badge_templates(raw)
+    con = connect()
+    try:
+        if not con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone():
+            raise ValueError("Événement introuvable.")
+        now = utc_now()
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DELETE FROM badge_templates WHERE event_id=?", (event_id,))
+        for template in templates:
+            con.execute(
+                """INSERT INTO badge_templates(id,event_id,name,format_w,format_h,front_json,back_json,
+                   qr_mode,qr_prefix,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("btm-" + uuid.uuid4().hex, event_id, template["name"], template["format_w"],
+                 template["format_h"], template["front_json"], template["back_json"],
+                 template["qr_mode"], template["qr_prefix"], template["is_default"], now, now),
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return badge_templates(event_id)
 
 
 def price_json(row) -> dict:
@@ -1645,6 +1875,7 @@ class Handler(BaseHTTPRequestHandler):
             message = (
                 f"Sauvegarde restaurée : {counts['events']} congrès, {counts['participants']} inscrits, "
                 f"{counts['users']} comptes, {counts['prices']} tarifs, "
+                f"{counts['badgeTemplates']} modèles de badge, "
                 f"{counts['syncOperations']} actions d’historique."
             )
             if created:
@@ -1840,6 +2071,19 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 con.close()
             return
+        match = re.fullmatch(r"/api/events/([^/]+)/badges", path)
+        if match:
+            event_id = match.group(1)
+            con = connect()
+            try:
+                exists = con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone()
+            finally:
+                con.close()
+            if not exists:
+                self.json(404, {"error": "Événement introuvable."})
+                return
+            self.json(200, {"eventId": event_id, "templates": badge_templates(event_id), "serverTime": utc_now()})
+            return
         match = re.fullmatch(r"/api/events/([^/]+)/prices", path)
         if match:
             event_id = match.group(1)
@@ -1871,6 +2115,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(200, {"participants": [participant_json(row) for row in rows], "serverTime": utc_now()})
             finally:
                 con.close()
+            return
+        badge_link = re.fullmatch(r"/p/([A-Za-z0-9._-]{1,40})", path)
+        if badge_link:
+            # Cible des QR codes : on renvoie vers le desk, code prérempli.
+            self.send_response(302)
+            self.send_header("Location", "/?badge=" + quote(badge_link.group(1), safe=""))
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
             return
         if path == "/" or path == "/index.html":
             self.serve_static("index.html")
@@ -1973,6 +2226,10 @@ class Handler(BaseHTTPRequestHandler):
             user = self.require_user()
             if not user:
                 return
+            match = re.fullmatch(r"/api/events/([^/]+)/badges", path)
+            if match:
+                self.save_badge_templates(match.group(1), self.read_json())
+                return
             match = re.fullmatch(r"/api/events/([^/]+)/prices", path)
             if not match:
                 self.json(404, {"error": "Route API introuvable."})
@@ -1987,6 +2244,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             print("PUT error:", repr(exc), flush=True)
             self.json(500, {"error": "Erreur interne du serveur."})
+
+    def save_badge_templates(self, event_id, body):
+        """Enregistre les modèles de badge d’un congrès (ouvert à tous les comptes)."""
+        con = connect()
+        try:
+            event = con.execute("SELECT status FROM events WHERE id=?", (event_id,)).fetchone()
+        finally:
+            con.close()
+        if not event:
+            self.json(404, {"error": "Événement introuvable."})
+            return
+        if event["status"] == "archived":
+            raise ValueError("Ce congrès est archivé. Réactivez-le pour modifier ses modèles de badge.")
+        templates = replace_badge_templates(event_id, (body or {}).get("templates"))
+        self.json(200, {"ok": True, "eventId": event_id, "templates": templates})
 
     def save_event_prices(self, event_id, body):
         """Enregistre la grille tarifaire d’un congrès (ouvert à tous les comptes)."""

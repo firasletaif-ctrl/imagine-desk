@@ -1,0 +1,4 @@
+qrcode-generator 1.4.4 — Copyright (c) 2009 Kazuhiko Arase
+MIT License — https://github.com/kazuhikoarase/qrcode-generator
+Vendu ici (fichier inchangé) pour générer les QR codes hors ligne.
+'QR Code' est une marque déposée de DENSO WAVE INCORPORATED.

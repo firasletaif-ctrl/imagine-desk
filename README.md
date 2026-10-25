@@ -19,7 +19,7 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 ## Comptes et permissions
 
 - **Administrateur** : crée et archive les congrès, importe les listes, gère les comptes et les mots de passe.
-- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire du congrès) et ajoute un participant au desk.
+- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès) et ajoute un participant au desk.
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
 - Les mots de passe ne doivent pas être partagés. Au premier test dans l’aperçu, utilisez un mot de passe provisoire, pas votre mot de passe personnel.
 
@@ -58,6 +58,56 @@ montant et le libellé du tarif appliqué (visible dans la fiche de l’inscrit,
 CSV). L’onglet **Rapports** ajoute une ventilation *Encaissements par tarif* et signale les tarifs
 actifs encore inutilisés. La grille est incluse dans la sauvegarde `.zip` (`05_event_prices.csv`) et
 restaurée avec le reste ; les anciennes sauvegardes, qui n’en contiennent pas, restent valides.
+
+## Modèles de badge, QR code et impression
+
+Chaque congrès a **ses propres modèles de badge**. Le *modèle de test* est fourni d’origine (90 × 60 mm,
+nom, organisation, catégorie, congrès, référence et QR code) et reste disponible en permanence : on y
+ajoute ses modèles importés sans le supprimer.
+
+**Onglet Badges → Modèles de badge** ouvre l’atelier :
+
+1. **Format libre** : largeur et hauteur en millimètres (30 à 300 mm), par exemple 90 × 60, 100 × 70,
+   105 × 74 (A7) ou 148 × 105 (A6), y compris les dos de badge au format carte.
+2. **Fond importé** : PNG, JPEG, WebP ou SVG, redimensionné automatiquement dans le navigateur
+   (plafond 1,8 Mo côté serveur). Le visuel peut être le recto **et** le verso.
+3. **Placement à la souris** : glissez chaque bloc (nom, organisation, catégorie, congrès, référence,
+   QR code, texte libre) sur le visuel ; cliquez pour régler taille (mm), largeur, graisse, couleur,
+   alignement et majuscules. L’aperçu est au même rendu que l’impression (unités relatives au badge).
+4. **QR code** : généré dans le navigateur, sans internet ni service externe. Deux contenus possibles :
+   - **la référence du badge** (`IE-0101`), lue par un lecteur USB ou une application de scan ;
+   - **un lien vers le site** : `…/p/CODE`, où `CODE` est la référence. Le serveur redirige
+     `/p/CODE` vers `/?badge=CODE` et le desk ouvre directement la fiche de l’inscrit.
+     L’adresse peut être remplacée (par exemple `https://mon-domaine.tn/p/`) ou contenir `{code}`.
+5. **Recto-verso** : une face verso vide signifie « recto seulement » ; sinon l’impression propose
+   d’imprimer le verso au dos.
+
+**Enregistrement** : `Modèles de badge → Enregistrer les modèles` (12 modèles maximum par congrès,
+noms uniques). Le modèle coché « par défaut » est celui utilisé pour les aperçus et l’impression du
+congrès. **Tous les comptes** peuvent modifier les modèles ; un congrès archivé doit être réactivé
+d’abord. Les modèles sont mis en cache sur chaque poste pour rester disponibles hors ligne.
+
+### Imprimer sur une feuille A4, même déjà entamée
+
+`Imprimer` (un badge) ou `Imprimer N badges` (la sélection) ouvre la fenêtre d’impression :
+
+- **Planche A4** : plusieurs badges par feuille. Les marges (haut, gauche, droite, bas), les écarts
+  horizontal/vertical et un décalage fin (0,5 mm) permettent d’aligner la planche sur le papier.
+- **Première case libre** : la grille affichée est la feuille A4 réelle ; cliquez sur la première case
+  encore libre. L’impression démarre à cette case et **n’utilise pas le papier déjà imprimé**
+  (cas d’une feuille dont un badge a été découpé en haut à droite).
+- **Repères de coupe** : cochez pour ajouter des repères fins aux quatre angles.
+- **Un badge par page** : page au format exact du badge (par exemple 90 × 60 mm).
+- **Recto-verso** : le verso est retourné (miroir horizontal) pour rester aligné après passage de la
+  feuille. Vérifiez ce réglage sur une feuille de brouillon.
+
+Dans la fenêtre du navigateur : **marges « Aucune »**, **échelle 100 %** et, si le visuel importé est
+un fond de couleur, **« Graphiques d’arrière-plan »**. Les images importées s’impriment dans tous les
+cas. L’aperçu initial peut donc sembler décalé si une marge par défaut est encore appliquée.
+
+Les modèles sont inclus dans la sauvegarde `.zip` (`06_badge_templates.csv`) et restaurés avec le
+reste ; les sauvegardes plus anciennes, qui n’en contiennent pas, restent valides (le modèle de test
+est alors proposé).
 
 ## Confirmation des paiements
 
@@ -151,7 +201,7 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
 - `manifest.json` (format, version, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements), `04_sync_operations.csv` — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.
