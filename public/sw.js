@@ -1,4 +1,4 @@
-const CACHE_NAME = 'imagine-events-desk-shell-v9-titres-lineales';
+const CACHE_NAME = 'imagine-events-desk-shell-v10-grille-tarifaire';
 const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/img/logo.png', '/img/favicon-32.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).catch(() => {}));

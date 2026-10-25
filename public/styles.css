@@ -277,3 +277,38 @@ td{font-size:16.5px}
 .onboarding h2{font-weight:700;letter-spacing:-.025em}
 .db-backup-panel h3{font-weight:700;letter-spacing:-.015em}
 .stat-value{font-weight:800;letter-spacing:-.03em}
+
+/* ── Grille tarifaire du congrès ─────────────────────────────────────── */
+.tariff-picker{margin:0 0 16px;padding:14px 15px;border:1px solid #DCE6F3;border-radius:14px;background:linear-gradient(135deg,#F3F7FD,#FBFCFE)}
+.tariff-picker-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:11px;flex-wrap:wrap}
+.tariff-picker-head strong{color:var(--navy);font-size:16px}
+.tariff-picker-head small{color:#5E6F87;font-size:13px}
+.tariff-buttons{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:9px}
+.tariff-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:11px 13px;border:1.5px solid #D9E3F0;border-radius:13px;background:#fff;text-align:left;transition:.14s}
+.tariff-btn:hover{border-color:var(--blue);box-shadow:0 8px 18px rgba(30,77,140,.12)}
+.tariff-btn.selected{border-color:var(--brand-red);background:var(--brand-red-soft);box-shadow:0 8px 18px rgba(196,30,58,.16)}
+.tariff-btn.same-category{border-color:#B9CDE8}
+.tariff-btn .tariff-amount{color:var(--navy);font-size:19px;font-weight:800;letter-spacing:-.02em;font-family:var(--font-display)}
+.tariff-btn .tariff-label{color:#3F4F68;font-size:14px;font-weight:600;line-height:1.3}
+.tariff-btn .tariff-cat{color:#6B7B93;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+
+.price-head,.price-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(120px,1fr) minmax(110px,.9fr) 88px 38px;gap:8px;align-items:center}
+.price-head{margin:0 0 6px;padding:0 3px;color:#5F7089;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.price-rows{display:flex;flex-direction:column;gap:7px}
+.price-row input[type=text],.price-row input[type=number],.price-row select{height:44px;padding:0 12px;border:1px solid #DAE3EF;border-radius:11px;color:var(--navy);background:#fff;font-size:15px;outline:0;min-width:0}
+.price-row input:focus,.price-row select:focus{border-color:var(--blue);box-shadow:0 0 0 4px rgba(30,77,140,.12)}
+.price-active{display:inline-flex;align-items:center;gap:6px;color:#3F4F68;font-size:13px;font-weight:600;white-space:nowrap}
+.price-active input{width:18px;height:18px;accent-color:#0E7C5A}
+.price-remove{width:34px;height:34px;font-size:20px;line-height:1;color:var(--brand-red-dark);border-color:#F2CBD3;background:var(--brand-red-soft)}
+.price-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.report-tariffs .link-button{margin-top:2px}
+@media(max-width:760px){
+  .price-head{display:none}
+  .price-row{grid-template-columns:1fr 1fr 38px;grid-template-areas:"label label remove" "cat amount active";row-gap:7px}
+  .price-row .price-label{grid-area:label}
+  .price-row .price-category{grid-area:cat}
+  .price-row .price-amount{grid-area:amount}
+  .price-row .price-active{grid-area:active}
+  .price-row .price-remove{grid-area:remove}
+  .tariff-buttons{grid-template-columns:1fr 1fr}
+}
