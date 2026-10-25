@@ -72,8 +72,11 @@ ajoute ses modèles importés sans le supprimer.
 2. **Fond importé** : PNG, JPEG, WebP ou SVG, redimensionné automatiquement dans le navigateur
    (plafond 1,8 Mo côté serveur). Le visuel peut être le recto **et** le verso.
 3. **Placement à la souris** : glissez chaque bloc (nom, organisation, catégorie, congrès, référence,
-   QR code, texte libre) sur le visuel ; cliquez pour régler taille (mm), largeur, graisse, couleur,
-   alignement et majuscules. L’aperçu est au même rendu que l’impression (unités relatives au badge).
+   QR code, texte libre) sur le visuel. Le déplacement suit le curseur image par image, sans
+   reconstruction de l’aperçu, et une pastille affiche la position en millimètres. Maintenez **Maj**
+   pour un pas de 1 % ou utilisez les **flèches du clavier** (Maj + flèche = 2 %) pour un ajustement
+   fin. Cliquez sur un bloc pour régler taille (mm), largeur, graisse, couleur, alignement et
+   majuscules. L’aperçu est au même rendu que l’impression (unités relatives au badge).
 4. **QR code** : généré dans le navigateur, sans internet ni service externe. Deux contenus possibles :
    - **la référence du badge** (`IE-0101`), lue par un lecteur USB ou une application de scan ;
    - **un lien vers le site** : `…/p/CODE`, où `CODE` est la référence. Le serveur redirige
