@@ -6,6 +6,8 @@ prévoir HTTPS, sauvegardes et une base PostgreSQL administrée.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import re
@@ -17,6 +19,7 @@ import hashlib
 import hmac
 import time
 import tempfile
+import zipfile
 from datetime import datetime, timezone, timedelta
 from email import policy
 from email.parser import BytesParser
@@ -50,6 +53,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 MAX_BODY = 12 * 1024 * 1024
 MAX_BACKUP_FILE = 50 * 1024 * 1024
 MAX_BACKUP_REQUEST = MAX_BACKUP_FILE + 1024 * 1024
+MAX_BACKUP_UNCOMPRESSED = 150 * 1024 * 1024
 CATEGORIES = {"participant", "vip", "speaker", "press", "team"}
 PAYMENT_STATUSES = {"unpaid", "paid", "exempt"}
 PAYMENT_METHODS = {"", "cash", "card", "transfer", "cheque", "mobile", "other"}
@@ -98,7 +102,479 @@ def redact_database_url(url: str = "") -> str:
     return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", url)
 
 
+# ═══════════ Sauvegarde complète (ZIP) ═══════════
+# Format : un ZIP avec un manifeste + un CSV par table + les instructions.
+# Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
+# chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
+BACKUP_FORMAT = "imagine-events-desk-backup"
+BACKUP_VERSION = 2
+BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
+
+# (préfixe du fichier, table, colonnes exportées dans cet ordre)
+BACKUP_TABLES = [
+    ("01_events", "events", ["id", "name", "event_date", "venue", "status", "currency", "created_at", "updated_at"]),
+    ("02_users", "users", ["id", "username", "password_salt", "password_hash", "role", "active", "created_at", "updated_at"]),
+    ("03_participants", "participants", [
+        "id", "event_id", "name", "email", "company", "category", "code", "checked_in_at",
+        "payment_status", "payment_amount", "payment_method", "payment_reference",
+        "payment_confirmed_at", "payment_confirmed_by", "created_at", "updated_at",
+    ]),
+    ("04_sync_operations", "sync_operations", ["op_id", "event_id", "participant_id", "action", "result_json", "created_at"]),
+]
+
+# Ordre d’insertion (respecte les clés étrangères).
+BACKUP_INSERT_ORDER = ["events", "users", "participants", "sync_operations"]
+
+# Ordre de suppression (inverse).
+BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "users", "events"]
+
+# Colonnes nulles dans le schéma : une cellule vide devient NULL à la restauration.
+BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at"}, "events": set(), "users": set(), "sync_operations": set()}
+BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": set(), "sync_operations": set()}
+
+BACKUP_INSTRUCTIONS = """SAUVEGARDE COMPLETE - Imagine Events Desk
+=========================================
+
+Ce fichier ZIP contient TOUT votre site : congres, inscrits, arrivees,
+paiements et comptes de l'equipe (mots de passe haches, jamais en clair).
+Les sessions ouvertes ne sont pas incluses.
+
+POUR RESTAURER (rotation mensuelle de la base Render gratuite)
+--------------------------------------------------------------
+1. Creer la nouvelle base PostgreSQL sur Render, puis la connecter au
+   web service (variable DATABASE_URL), et redemarrer le service.
+2. Ouvrir le site une fois : les tables vides sont creees automatiquement.
+   L'ecran peut proposer de creer un compte administrateur : c'est normal,
+   vous pouvez en creer un (il sera conserve lors de la restauration).
+3. Se connecter, aller dans "Comptes" -> "Restaurer une sauvegarde".
+4. Choisir CE fichier ZIP, saisir votre mot de passe, valider.
+5. Verifier les congres, les inscrits et les paiements, puis exporter
+   une nouvelle sauvegarde de controle.
+
+CE QUI EST REMPLACE
+-------------------
+- Congres, inscrits, arrivees, paiements : remplaces par le contenu du ZIP.
+- Comptes : remplaces par ceux du ZIP ; votre compte actuel est conserve
+  s'il n'y figure pas, pour eviter de perdre l'acces.
+- Sessions : toutes fermees (vous restez connecte sur cet appareil).
+
+SECURITE
+--------
+Le ZIP contient les empreintes des mots de passe. Gardez-le dans un endroit
+prive, ne le partagez pas et ne le mettez pas sur GitHub.
+
+Format : format=v{v}, cree par Imagine Events Desk.
+"""
+
+
+def meta_get(con: "DBConnection", key: str) -> str:
+    try:
+        row = con.execute("SELECT value FROM app_meta WHERE key=?", (key,)).fetchone()
+        return (row["value"] if row else "") or ""
+    except Exception:
+        return ""
+
+
+def meta_set(con: "DBConnection", key: str, value: str) -> None:
+    now = utc_now()
+    existing = con.execute("SELECT 1 FROM app_meta WHERE key=?", (key,)).fetchone()
+    if existing:
+        con.execute("UPDATE app_meta SET value=?,updated_at=? WHERE key=?", (value, now, key))
+    else:
+        con.execute("INSERT INTO app_meta(key,value,updated_at) VALUES(?,?,?)", (key, value, now))
+
+
+def backup_csv(headers, rows) -> str:
+    """CSV lisible par Excel (séparateur « ; », BOM UTF-8, CRLF)."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow(["" if row.get(column) is None else row.get(column) for column in headers])
+    return "\ufeff" + buffer.getvalue()
+
+
+def backup_zip_bytes() -> tuple[bytes, dict]:
+    """Construit le ZIP de sauvegarde et renvoie (octets, manifeste)."""
+    con = connect()
+    try:
+        tables = {}
+        counts = {}
+        for _, table, columns in BACKUP_TABLES:
+            rows = [dict(row) for row in con.execute(f"SELECT {', '.join(columns)} FROM {table}").fetchall()]
+            counts[table] = len(rows)
+            tables[table] = backup_csv(columns, rows)
+        manifest = {
+            "format": BACKUP_FORMAT,
+            "version": BACKUP_VERSION,
+            "app": "Imagine Events Desk",
+            "createdAt": utc_now(),
+            "engine": db_backend(),
+            "counts": counts,
+            "tables": {table: [prefix, columns] for prefix, table, columns in BACKUP_TABLES},
+            "instructions": BACKUP_INSTRUCTIONS_NAME,
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            for prefix, table, _columns in BACKUP_TABLES:
+                archive.writestr(f"{prefix}.csv", tables[table])
+            archive.writestr(BACKUP_INSTRUCTIONS_NAME, BACKUP_INSTRUCTIONS.replace("{v}", str(BACKUP_VERSION)))
+        meta_set(con, "last_backup_at", manifest["createdAt"])
+    finally:
+        con.close()
+    return buffer.getvalue(), manifest
+
+
+def parse_backup_csv(raw: bytes, table: str, columns: list[str]) -> list[dict]:
+    """Lit un CSV de sauvegarde en tolérant BOM, séparateur et colonnes manquantes."""
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    first_line = text.split("\n", 1)[0]
+    delimiter = ";" if first_line.count(";") >= first_line.count(",") else ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    if reader.fieldnames is None:
+        return []
+    present = {name.strip() for name in reader.fieldnames if name}
+    unknown = present - set(columns)
+    rows = []
+    for line_number, row in enumerate(reader, start=2):
+        if not any((value or "").strip() for value in row.values() if isinstance(value, str)):
+            continue
+        item = {}
+        for column in columns:
+            value = row.get(column)
+            value = "" if value is None else str(value)
+            if column in BACKUP_NULLABLE.get(table, set()):
+                item[column] = value if value != "" else None
+            elif column in BACKUP_INTEGER_COLUMNS.get(table, set()):
+                item[column] = 1 if value.strip() in ("1", "true", "True", "oui") else 0
+            else:
+                item[column] = value
+        rows.append(item)
+    return rows
+
+
+def read_backup_zip(raw: bytes) -> tuple[dict, dict]:
+    """Valide le ZIP et renvoie (données par table, manifeste). Lève ValueError si invalide."""
+    if not raw or len(raw) < 100:
+        raise ValueError("Le fichier de sauvegarde est vide.")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise ValueError(
+            "Ce fichier n’est pas un ZIP valide. Utilisez le fichier téléchargé via "
+            "« Exporter la sauvegarde » (extension .zip)."
+        ) from None
+    with archive:
+        names = set(archive.namelist())
+        if "manifest.json" not in names:
+            raise ValueError("Ce ZIP ne contient pas de manifeste : ce n’est pas une sauvegarde Imagine Events Desk.")
+        infos = archive.infolist()
+        if len(infos) > 50:
+            raise ValueError("Ce ZIP contient trop de fichiers pour une sauvegarde Imagine Events Desk.")
+        total_size = sum(info.file_size for info in infos)
+        if total_size > MAX_BACKUP_UNCOMPRESSED:
+            raise OverflowError("La sauvegarde décompressée dépasse la limite autorisée (150 Mo).")
+        try:
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8-sig"))
+        except Exception:
+            raise ValueError("Le manifeste de la sauvegarde est illisible.") from None
+        if not isinstance(manifest, dict) or manifest.get("format") != BACKUP_FORMAT:
+            raise ValueError("Ce ZIP n’a pas été produit par Imagine Events Desk.")
+        try:
+            version = int(manifest.get("version") or 0)
+        except (TypeError, ValueError):
+            version = 0
+        if version <= 0:
+            raise ValueError("Version de sauvegarde inconnue.")
+        if version > BACKUP_VERSION:
+            raise ValueError("Cette sauvegarde vient d’une version plus récente de l’application. Mettez le serveur à jour.")
+        data = {}
+        for prefix, table, columns in BACKUP_TABLES:
+            filename = f"{prefix}.csv"
+            if filename not in names:
+                data[table] = []
+                continue
+            info = archive.getinfo(filename)
+            if info.file_size > MAX_BACKUP_FILE:
+                raise OverflowError(f"Le fichier {filename} dépasse la limite de 50 Mo.")
+            data[table] = parse_backup_csv(archive.read(info), table, columns)
+    return data, manifest
+
+
+def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
+    """Remplace les données par celles de la sauvegarde, en une seule transaction.
+
+    Toute anomalie lève ValueError avant ou pendant la transaction : dans ce cas
+    rien n’est modifié (rollback), pour ne jamais laisser une base à moitié restaurée.
+    `keep_user` est le compte administrateur qui restaure : il est toujours conservé
+    (et promu administrateur si nécessaire) pour ne jamais bloquer l’accès au site.
+    """
+    events, users = data.get("events", []), data.get("users", [])
+    participants, operations = data.get("participants", []), data.get("sync_operations", [])
+    if not events and not participants and not users:
+        raise ValueError("Cette sauvegarde ne contient aucune donnée à restaurer.")
+
+    # ── Validation préalable (aucune écriture) ──
+    event_ids = set()
+    clean_events = []
+    for index, row in enumerate(events, start=1):
+        event_id = clean_text(row.get("id"), 100)
+        name = clean_text(row.get("name"), 180)
+        if not event_id or not name:
+            raise ValueError(f"Congrès invalide à la ligne {index} de la sauvegarde (identifiant ou nom manquant).")
+        if event_id in event_ids:
+            raise ValueError(f"Le congrès « {event_id} » apparaît deux fois dans la sauvegarde.")
+        status = clean_text(row.get("status"), 20)
+        clean_events.append({
+            "id": event_id, "name": name,
+            "event_date": clean_text(row.get("event_date"), 20),
+            "venue": clean_text(row.get("venue"), 180),
+            "status": status if status in ("active", "archived") else "active",
+            "currency": clean_currency(row.get("currency")),
+            "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
+            "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
+        })
+        event_ids.add(event_id)
+
+    clean_users = []
+    usernames = set()
+    for index, row in enumerate(users, start=1):
+        username = normalize_username(row.get("username"))
+        salt = clean_text(row.get("password_salt"), 128)
+        digest = clean_text(row.get("password_hash"), 128)
+        role = clean_text(row.get("role"), 20)
+        try:
+            salt_bytes, hash_bytes = bytes.fromhex(salt), bytes.fromhex(digest)
+        except ValueError:
+            raise ValueError(f"Compte « {username or index} » : empreinte de mot de passe illisible dans la sauvegarde.") from None
+        if (not re.fullmatch(r"[a-z0-9._-]{3,40}", username) or role not in ("admin", "desk")
+                or len(salt_bytes) != 16 or len(hash_bytes) != 32):
+            raise ValueError(f"Compte « {username or index} » invalide dans la sauvegarde.")
+        if username in usernames:
+            raise ValueError(f"Le compte « {username} » apparaît deux fois dans la sauvegarde.")
+        usernames.add(username)
+        clean_users.append({
+            "id": clean_text(row.get("id"), 100) or "usr-" + uuid.uuid4().hex,
+            "username": username, "password_salt": salt, "password_hash": digest, "role": role,
+            "active": row.get("active") if isinstance(row.get("active"), int) else (1 if str(row.get("active", "1")).strip() in ("1", "true", "oui") else 0),
+            "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
+            "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
+        })
+    clean_participants = []
+    seen_ids, seen_codes = set(), set()
+    for index, row in enumerate(participants, start=1):
+        person_id = clean_text(row.get("id"), 100)
+        event_id = clean_text(row.get("event_id"), 100)
+        name = clean_text(row.get("name"), 180)
+        if not person_id or not event_id or not name:
+            raise ValueError(f"Inscrit invalide à la ligne {index} (identifiant, congrès ou nom manquant).")
+        if event_id not in event_ids:
+            raise ValueError(f"L’inscrit « {name} » est rattaché à un congrès absent de la sauvegarde.")
+        if person_id in seen_ids:
+            raise ValueError(f"L’inscrit « {name} » apparaît deux fois dans la sauvegarde.")
+        code = clean_text(row.get("code"), 40)
+        code_key = (event_id, code.lower())
+        if code and code_key in seen_codes:
+            raise ValueError(f"Le code badge « {code} » est utilisé deux fois dans le même congrès de la sauvegarde.")
+        if code:
+            seen_codes.add(code_key)
+        checked = clean_text(row.get("checked_in_at"), 64) or None
+        pay_status = clean_payment_status(row.get("payment_status") or "unpaid")
+        try:
+            pay_amount = clean_amount(row.get("payment_amount") or 0) if pay_status == "paid" else 0.0
+        except ValueError:
+            pay_amount = 0.0
+        pay_confirmed = clean_text(row.get("payment_confirmed_at"), 64) or None
+        if pay_status != "unpaid" and not pay_confirmed:
+            pay_confirmed = utc_now()
+        clean_participants.append({
+            "id": person_id, "event_id": event_id, "name": name,
+            "email": clean_text(row.get("email"), 180), "company": clean_text(row.get("company"), 180),
+            "category": clean_category(row.get("category")), "code": code,
+            "checked_in_at": checked,
+            "payment_status": pay_status, "payment_amount": pay_amount,
+            "payment_method": clean_payment_method(row.get("payment_method")) if pay_status == "paid" else "",
+            "payment_reference": clean_text(row.get("payment_reference"), 120) if pay_status == "paid" else "",
+            "payment_confirmed_at": pay_confirmed if pay_status != "unpaid" else None,
+            "payment_confirmed_by": clean_text(row.get("payment_confirmed_by"), 80) if pay_status != "unpaid" else "",
+            "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
+        })
+        seen_ids.add(person_id)
+
+    clean_operations = []
+    seen_ops = set()
+    for row in operations:
+        op_id = clean_text(row.get("op_id"), 100)
+        event_id = clean_text(row.get("event_id"), 100)
+        action = clean_text(row.get("action"), 30)
+        if not op_id or op_id in seen_ops or event_id not in event_ids or action not in ("create", "checkin", "undo", "payment"):
+            continue  # ligne d’historique inutilisable : ignorée sans bloquer la restauration
+        result_json = clean_text(row.get("result_json"), 4000) or "{}"
+        try:
+            json.loads(result_json)
+        except ValueError:
+            result_json = "{}"
+        clean_operations.append({
+            "op_id": op_id, "event_id": event_id,
+            "participant_id": clean_text(row.get("participant_id"), 100),
+            "action": action, "result_json": result_json,
+            "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
+        })
+        seen_ops.add(op_id)
+
+    # ── Écriture en une transaction ──
+    con = connect()
+    try:
+        # Empreintes du compte restaurateur lues AVANT la purge des tables : elles lui
+        # garantissent de pouvoir se reconnecter une fois la restauration terminée.
+        if keep_user is not None and keep_user.get("id") and not (
+                keep_user.get("password_salt") and keep_user.get("password_hash")):
+            current = con.execute(
+                "SELECT password_salt,password_hash FROM users WHERE id=?", (keep_user["id"],)
+            ).fetchone()
+            if current is not None:
+                keep_user = dict(keep_user, password_salt=current["password_salt"],
+                                 password_hash=current["password_hash"])
+        con.execute("BEGIN")
+        for table in BACKUP_DELETE_ORDER:
+            con.execute(f"DELETE FROM {table}")
+        for event in clean_events:
+            con.execute(
+                "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (event["id"], event["name"], event["event_date"], event["venue"], event["status"],
+                 event["currency"], event["created_at"], event["updated_at"]),
+            )
+        for user in clean_users:
+            con.execute(
+                "INSERT INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (user["id"], user["username"], user["password_salt"], user["password_hash"], user["role"],
+                 user["active"], user["created_at"], user["updated_at"]),
+            )
+        now = utc_now()
+        session_user_id = None
+        if keep_user is not None:
+            actor_id = clean_text(keep_user.get("id"), 100)
+            actor_username = normalize_username(keep_user.get("username"))
+            existing = con.execute("SELECT id FROM users WHERE id=?", (actor_id,)).fetchone() if actor_id else None
+            if existing is None and actor_username:
+                clash = con.execute("SELECT id FROM users WHERE lower(username)=lower(?)", (actor_username,)).fetchone()
+                if clash is not None:
+                    existing = clash
+                    actor_id = clash["id"]
+            if existing is not None:
+                # Compte présent dans la sauvegarde : on lui rend son mot de passe actuel
+                # (celui du ZIP pourrait être différent) et on garantit le rôle administrateur.
+                if keep_user.get("password_salt") and keep_user.get("password_hash"):
+                    con.execute(
+                        "UPDATE users SET role='admin',active=1,password_salt=?,password_hash=?,updated_at=? WHERE id=?",
+                        (clean_text(keep_user.get("password_salt"), 128),
+                         clean_text(keep_user.get("password_hash"), 128), now, actor_id))
+                else:
+                    con.execute("UPDATE users SET role='admin',active=1,updated_at=? WHERE id=?", (now, actor_id))
+                session_user_id = actor_id
+            else:
+                # Le compte n’est pas dans la sauvegarde : on le réinsère tel quel (mêmes empreintes).
+                con.execute(
+                    "INSERT INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?, 'admin',1,?,?)",
+                    (actor_id or "usr-" + uuid.uuid4().hex, actor_username,
+                     clean_text(keep_user.get("password_salt"), 128), clean_text(keep_user.get("password_hash"), 128),
+                     now, now),
+                )
+                session_user_id = actor_id
+            admins = con.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND active=1").fetchone()["n"]
+            if not admins and session_user_id:
+                con.execute("UPDATE users SET role='admin',active=1 WHERE id=?", (session_user_id,))
+        for person in clean_participants:
+            con.execute(
+                """INSERT INTO participants(
+                    id,event_id,name,email,company,category,code,checked_in_at,
+                    payment_status,payment_amount,payment_method,payment_reference,
+                    payment_confirmed_at,payment_confirmed_by,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (person["id"], person["event_id"], person["name"], person["email"], person["company"],
+                 person["category"], person["code"], person["checked_in_at"], person["payment_status"],
+                 person["payment_amount"], person["payment_method"], person["payment_reference"],
+                 person["payment_confirmed_at"], person["payment_confirmed_by"], person["created_at"],
+                 now),  # force les postes déjà ouverts à recharger la liste restaurée
+            )
+        for operation in clean_operations:
+            con.execute(
+                "INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) VALUES(?,?,?,?,?,?)",
+                (operation["op_id"], operation["event_id"], operation["participant_id"], operation["action"],
+                 operation["result_json"], operation["created_at"]),
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+    return {
+        "events": len(clean_events), "users": len(clean_users),
+        "participants": len(clean_participants), "syncOperations": len(clean_operations),
+        "sessionUserId": session_user_id,
+    }
+
+
+def backup_age_days(value: str) -> int | None:
+    if not value:
+        return None
+    try:
+        created = datetime.fromisoformat(value)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return max(0, (datetime.now(timezone.utc) - created).days)
+    except (TypeError, ValueError):
+        return None
+
+
 def storage_info() -> dict:
+    """État du stockage : moteur réel, dernière sauvegarde, expiration éventuelle."""
+    last_backup = ""
+    try:
+        con = connect()
+        try:
+            last_backup = meta_get(con, "last_backup_at")
+        finally:
+            con.close()
+    except Exception:
+        last_backup = ""
+    age = backup_age_days(last_backup)
+
+    # Date d’expiration de la base (Render gratuit : 30 jours), fournie en variable.
+    expires_at = os.environ.get("IMAGINE_DB_EXPIRES_AT", "").strip()
+    days_left = None
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            days_left = (expiry - datetime.now(timezone.utc)).days
+        except ValueError:
+            expires_at = ""
+            days_left = None
+
+    warnings = []
+    if db_is_ephemeral():
+        warnings.append(
+            "La base est enregistrée dans un dossier temporaire : elle sera perdue au redémarrage. "
+            "Utilisez PostgreSQL (DATABASE_URL) ou un disque persistant."
+        )
+    if days_left is not None and days_left <= 7:
+        warnings.append(
+            f"La base PostgreSQL expire dans {max(days_left, 0)} jour(s). Exportez la sauvegarde, "
+            "créez la nouvelle base, puis restaurez-la depuis Comptes."
+        )
+    if age is not None and age >= 25:
+        warnings.append(
+            f"Dernière sauvegarde il y a {age} jours. Exportez-en une nouvelle avant la rotation de la base."
+        )
+
     if USE_POSTGRES:
         host = ""
         try:
@@ -106,36 +582,39 @@ def storage_info() -> dict:
             host = urlsplit(DATABASE_URL).hostname or ""
         except ValueError:
             host = ""
-        return {
+        base = {
             "backend": "postgres",
             "path": f"PostgreSQL · {host}" if host else "PostgreSQL (DATABASE_URL)",
             "exists": True,
             "sizeBytes": 0,
             "ephemeral": False,
             "envOverride": True,
-            "warnings": "",
             "detail": redact_database_url(),
         }
-    exists = DB_PATH.is_file()
-    try:
-        size = DB_PATH.stat().st_size if exists else 0
-    except OSError:
-        size = 0
-    return {
-        "backend": "sqlite",
-        "path": db_display_path(),
-        "exists": exists,
-        "sizeBytes": size,
-        "ephemeral": db_is_ephemeral(),
-        "envOverride": bool(os.environ.get("IMAGINE_DB_PATH", "").strip()),
-        "detail": "",
-        "warnings": (
-            "La base est enregistrée dans un dossier temporaire : elle sera perdue quand le serveur "
-            "redémarre ou quand l’hébergement redéploie. Déplacez-la vers un disque persistant "
-            "(variable IMAGINE_DB_PATH), ou utilisez la base PostgreSQL de Render (DATABASE_URL)."
-            if db_is_ephemeral() else ""
-        ),
-    }
+    else:
+        exists = DB_PATH.is_file()
+        try:
+            size = DB_PATH.stat().st_size if exists else 0
+        except OSError:
+            size = 0
+        base = {
+            "backend": "sqlite",
+            "path": db_display_path(),
+            "exists": exists,
+            "sizeBytes": size,
+            "ephemeral": db_is_ephemeral(),
+            "envOverride": bool(os.environ.get("IMAGINE_DB_PATH", "").strip()),
+            "detail": "",
+        }
+    base.update({
+        "warnings": " ".join(warnings),
+        "lastBackupAt": last_backup,
+        "backupAgeDays": age,
+        "expiresAt": expires_at,
+        "daysLeft": days_left,
+        "backupFormats": ["zip", "sqlite3"] if base["backend"] == "sqlite" else ["zip", "sql"],
+    })
+    return base
 
 
 def pg_sql(sql: str) -> str:
@@ -325,6 +804,14 @@ SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)",
+    # Métadonnées locales du serveur (jamais restaurées depuis une sauvegarde).
+    """
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    )
+    """,
 ]
 
 # Colonnes ajoutées après la première version de l’application (migration douce).
@@ -814,14 +1301,48 @@ class Handler(BaseHTTPRequestHandler):
         self.json(200,{"ok":True},self.auth_cookie(token))
 
     def export_database_backup(self):
-        """Télécharge une sauvegarde cohérente, sans sessions actives.
+        """Télécharge une sauvegarde complète.
 
-        SQLite : copie binaire via l’API backup. PostgreSQL : fichier SQL (pg_dump
-        léger, tables et données), nommé .sql et rechargeable via psql.
+        Format par défaut : un ZIP (manifeste + un CSV par table) restaurable
+        depuis le navigateur, sur SQLite comme sur PostgreSQL. Les formats
+        hérités `.sqlite3` (SQLite) et `.sql` (PostgreSQL, rejouable avec psql)
+        restent disponibles via ?format=sqlite3 / ?format=sql.
         """
-        if USE_POSTGRES:
+        query = parse_qs(urlparse(self.path).query)
+        wanted = (query.get("format", ["zip"])[0] or "zip").lower()
+        if wanted == "sql":
+            if not USE_POSTGRES:
+                self.json(400, {"error": "Le format .sql est réservé au stockage PostgreSQL. Utilisez le ZIP."})
+                return
             self.export_postgres_backup()
             return
+        if wanted == "sqlite3":
+            if USE_POSTGRES:
+                self.json(400, {"error": "Le fichier .sqlite3 ne peut être exporté que depuis un stockage SQLite. Utilisez le ZIP, restaurable partout."})
+                return
+            self.export_sqlite_backup()
+            return
+        if wanted not in ("zip", ""):
+            self.json(400, {"error": "Format de sauvegarde inconnu. Utilisez zip, sqlite3 ou sql."})
+            return
+        self.export_zip_backup()
+
+    def export_zip_backup(self):
+        try:
+            payload, manifest = backup_zip_bytes()
+        except Exception as exc:
+            print("Backup export error:", repr(exc), flush=True)
+            self.json(500, {"error": "Impossible de préparer la sauvegarde. Réessayez."})
+            return
+        filename = "imagine-events-sauvegarde-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M") + ".zip"
+        if len(payload) > MAX_BACKUP_FILE:
+            self.json(413, {"error": "La sauvegarde dépasse la limite de 50 Mo."})
+            return
+        self.send_bytes(200, payload, "application/zip", {
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        })
+
+    def export_sqlite_backup(self):
         temp_fd, temp_name = tempfile.mkstemp(prefix="imagine-events-export-", suffix=".sqlite3")
         os.close(temp_fd)
         source = None
@@ -902,46 +1423,107 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             con.close()
 
-    def import_database_backup(self):
-        """Remplace les données d’événements par une sauvegarde SQLite validée.
-
-        Les comptes déjà présents restent actifs; les anciens comptes sont ajoutés
-        si leur identifiant/nom d’utilisateur ne fait pas conflit. Les sessions
-        du fichier importé ne sont jamais reprises.
-        """
+    def read_multipart_upload(self):
+        """Renvoie (fichier, champs) pour un POST multipart ou lève ValueError."""
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type.lower():
-            raise ValueError("Choisissez un fichier SQLite à importer.")
-        # Lire le corps avant de refuser : sinon le client reçoit une connexion coupée.
+            raise ValueError("Choisissez un fichier de sauvegarde à restaurer.")
         raw = self.read_raw(MAX_BACKUP_REQUEST)
-        if USE_POSTGRES:
-            raise ValueError(
-                "La restauration de fichier est réservée au stockage SQLite. En PostgreSQL, "
-                "restaurez la sauvegarde .sql avec psql ou depuis le tableau de bord Render."
-            )
-        envelope = ("MIME-Version: 1.0\r\nContent-Type: " + content_type + "\r\n\r\n").encode("latin-1") + raw
         try:
+            envelope = ("MIME-Version: 1.0\r\nContent-Type: " + content_type + "\r\n\r\n").encode("latin-1") + raw
             message = BytesParser(policy=policy.default).parsebytes(envelope)
-            part = next((p for p in message.iter_parts() if p.get_filename()), None)
-            if part is None:
-                raise ValueError("Aucun fichier de base de données reçu.")
-            filename = clean_text(Path(part.get_filename()).name, 250).lower()
-            if not filename.endswith((".sqlite3", ".sqlite", ".db")):
-                raise ValueError("Utilisez une sauvegarde .sqlite3, .sqlite ou .db.")
-            file_bytes = part.get_payload(decode=True)
-            if not file_bytes:
-                raise ValueError("Le fichier SQLite est vide.")
-            if len(file_bytes) > MAX_BACKUP_FILE:
-                raise OverflowError("La sauvegarde dépasse la limite de 50 Mo.")
-            if not file_bytes.startswith(b"SQLite format 3\x00"):
-                raise ValueError("Le fichier ne semble pas être une base SQLite valide.")
-        except OverflowError:
-            raise
-        except ValueError:
-            raise
         except Exception:
-            raise ValueError("Impossible de lire le formulaire d’import. Choisissez un fichier SQLite valide.")
+            raise ValueError("Impossible de lire le fichier envoyé. Réessayez.") from None
+        file_part = None
+        fields = {}
+        for part in message.iter_parts():
+            filename = part.get_filename()
+            if filename:
+                file_part = part
+            else:
+                try:
+                    fields[part.get_param("name", header="content-disposition") or ""] = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+                except Exception:
+                    continue
+        if file_part is None:
+            raise ValueError("Aucun fichier de sauvegarde reçu.")
+        payload = file_part.get_payload(decode=True) or b""
+        if not payload:
+            raise ValueError("Le fichier de sauvegarde est vide.")
+        if len(payload) > MAX_BACKUP_REQUEST:
+            raise OverflowError("Le fichier dépasse la limite de 50 Mo.")
+        return (clean_text(file_part.get_filename(), 250), payload), fields
 
+    def import_database_backup(self, user=None):
+        """Restaure une sauvegarde ZIP (les deux moteurs) ou .sqlite3 (SQLite)."""
+        (filename, payload), fields = self.read_multipart_upload()
+        filename = (filename or "").lower()
+
+        # Confirmation par mot de passe : la restauration remplace toutes les données.
+        password = fields.get("password", "").strip()
+        con = connect()
+        try:
+            row = con.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone() if user else None
+        finally:
+            con.close()
+        if not row or not password_matches(password, row["password_salt"], row["password_hash"]):
+            raise ValueError("Mot de passe administrateur incorrect : la restauration a été annulée.")
+
+        if filename.endswith(".zip"):
+            try:
+                data, manifest = read_backup_zip(payload)
+            except OverflowError as exc:
+                raise ValueError(str(exc)) from None
+            # On transmet la ligne complète (avec les empreintes) : l’administrateur qui
+            # restaure conserve ainsi son mot de passe et son accès après l’import.
+            counts = restore_backup_data(data, keep_user=dict(row) if row else dict(user))
+            token = self.ensure_restored_admin(counts.get("sessionUserId") or user["id"])
+            con = connect()
+            try:
+                meta_set(con, "last_backup_at", clean_text(manifest.get("createdAt"), 64) or utc_now())
+            except Exception:
+                pass
+            finally:
+                con.close()
+            created = manifest.get("createdAt", "")
+            message = (
+                f"Sauvegarde restaurée : {counts['events']} congrès, {counts['participants']} inscrits, "
+                f"{counts['users']} comptes, {counts['syncOperations']} actions d’historique."
+            )
+            if created:
+                message += f" Sauvegarde du {clean_text(created, 40)}."
+            self.json(200, {"ok": True, "restored": counts, "manifest": manifest, "message": message},
+                      self.auth_cookie(token))
+            return
+
+        if filename.endswith((".sqlite3", ".sqlite", ".db")):
+            if USE_POSTGRES:
+                raise ValueError(
+                    "Ce fichier .sqlite3 ne s’importe que dans un stockage SQLite. En PostgreSQL, "
+                    "utilisez la sauvegarde .zip exportée depuis Comptes."
+                )
+            self.import_sqlite_file(payload)
+            return
+
+        raise ValueError(
+            "Format non reconnu. Choisissez le fichier .zip téléchargé via « Exporter la sauvegarde » "
+            "(ou un ancien fichier .sqlite3 lorsque le stockage est SQLite)."
+        )
+
+    def ensure_restored_admin(self, session_user_id):
+        """Ferme les sessions restaurées et rouvre une session pour l’administrateur."""
+        con = connect()
+        try:
+            con.execute("DELETE FROM sessions")
+            con.execute("UPDATE users SET role='admin',active=1,updated_at=? WHERE id=?", (utc_now(), session_user_id))
+        finally:
+            con.close()
+        return self.new_session(session_user_id)
+
+    def import_sqlite_file(self, file_bytes):
+        """Ancienne restauration SQLite (fichier binaire), conservée pour compatibilité."""
+        if not file_bytes.startswith(b"SQLite format 3\x00"):
+            raise ValueError("Le fichier ne semble pas être une base SQLite valide.")
         temp_fd, temp_name = tempfile.mkstemp(prefix="imagine-events-import-", suffix=".sqlite3")
         os.close(temp_fd)
         source = None
@@ -953,56 +1535,32 @@ class Handler(BaseHTTPRequestHandler):
             check = source.execute("PRAGMA quick_check").fetchone()
             if not check or check[0] != "ok":
                 raise ValueError("La sauvegarde est endommagée; aucun changement n’a été appliqué.")
-
             tables = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {"events", "participants"}.issubset(tables):
                 raise ValueError("Cette base ne contient pas les tables événements et participants attendues.")
-
-            def columns(table):
-                return {row[1] for row in source.execute(f"PRAGMA table_info({table})")}
-
-            event_columns = columns("events")
-            participant_columns = columns("participants")
-            if not {"id", "name"}.issubset(event_columns):
-                raise ValueError("Schéma d’événements non compatible.")
-            if not {"id", "event_id", "name"}.issubset(participant_columns):
-                raise ValueError("Schéma de participants non compatible.")
-            sync_columns = columns("sync_operations") if "sync_operations" in tables else set()
-            required_sync = {"op_id", "event_id", "participant_id", "action", "result_json", "created_at"}
-            if sync_columns and not required_sync.issubset(sync_columns):
-                raise ValueError("Schéma d’historique de synchronisation non compatible.")
-            user_columns = columns("users") if "users" in tables else set()
-            required_users = {"id", "username", "password_salt", "password_hash", "role", "active", "created_at", "updated_at"}
-            if user_columns and not required_users.issubset(user_columns):
-                raise ValueError("Schéma de comptes non compatible.")
-
+            columns_of = lambda table: {row[1] for row in source.execute(f"PRAGMA table_info({table})")}
+            if not {"id", "name"}.issubset(columns_of("events")) or not {"id", "event_id", "name"}.issubset(columns_of("participants")):
+                raise ValueError("Le schéma de cette sauvegarde SQLite n’est pas compatible.")
             con = connect()
-            con.execute("BEGIN IMMEDIATE")
-            con.execute("DELETE FROM sync_operations")
-            con.execute("DELETE FROM participants")
-            con.execute("DELETE FROM events")
-            event_count = participant_count = operation_count = imported_users = skipped_users = 0
+            con.execute("BEGIN")
+            for table in BACKUP_DELETE_ORDER:
+                con.execute(f"DELETE FROM {table}")
             event_ids = set()
-
+            now = utc_now()
             for raw_event in source.execute("SELECT * FROM events"):
                 item = dict(raw_event)
                 event_id = clean_text(item.get("id"), 100)
                 name = clean_text(item.get("name"), 180)
                 if not event_id or not name:
                     raise ValueError("La sauvegarde contient un événement sans identifiant ou sans nom.")
-                now = utc_now()
                 status = clean_text(item.get("status", "active"), 20)
-                if status not in ("active", "archived"):
-                    status = "active"
-                con.execute("INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (
-                    event_id, name, clean_text(item.get("event_date", item.get("date", "")), 20),
-                    clean_text(item.get("venue", ""), 180), status, clean_currency(item.get("currency")),
-                    clean_text(item.get("created_at", ""), 64) or now,
-                    clean_text(item.get("updated_at", ""), 64) or now
-                ))
+                con.execute(
+                    "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (event_id, name, clean_text(item.get("event_date", ""), 20), clean_text(item.get("venue", ""), 180),
+                     status if status in ("active", "archived") else "active", clean_currency(item.get("currency")),
+                     clean_text(item.get("created_at", ""), 64) or now, clean_text(item.get("updated_at", ""), 64) or now),
+                )
                 event_ids.add(event_id)
-                event_count += 1
-
             for raw_person in source.execute("SELECT * FROM participants"):
                 item = dict(raw_person)
                 event_id = clean_text(item.get("event_id"), 100)
@@ -1010,101 +1568,55 @@ class Handler(BaseHTTPRequestHandler):
                 name = clean_text(item.get("name"), 180)
                 if not event_id or event_id not in event_ids or not person_id or not name:
                     raise ValueError("La sauvegarde contient un participant incomplet ou lié à un congrès absent.")
-                now = utc_now()
                 code = clean_text(item.get("code", ""), 40)
                 if not code or con.execute("SELECT 1 FROM participants WHERE event_id=? AND lower(code)=lower(?)", (event_id, code)).fetchone():
                     code = unique_code(con, event_id)
-                checked = clean_text(item.get("checked_in_at", ""), 64) or None
                 pay_status = clean_payment_status(item.get("payment_status") or "unpaid")
                 try:
                     pay_amount = clean_amount(item.get("payment_amount") or 0) if pay_status == "paid" else 0.0
                 except ValueError:
                     pay_amount = 0.0
-                pay_method = clean_payment_method(item.get("payment_method") or "") if pay_status == "paid" else ""
-                pay_reference = clean_text(item.get("payment_reference") or "", 120) if pay_status == "paid" else ""
-                pay_at = clean_text(item.get("payment_confirmed_at") or "", 64) if pay_status != "unpaid" else None
-                pay_by = clean_text(item.get("payment_confirmed_by") or "", 80) if pay_status != "unpaid" else ""
-                con.execute("""INSERT INTO participants(
-                    id,event_id,name,email,company,category,code,checked_in_at,
-                    payment_status,payment_amount,payment_method,payment_reference,payment_confirmed_at,payment_confirmed_by,
-                    created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    person_id, event_id, name, clean_text(item.get("email", ""), 180),
-                    clean_text(item.get("company", ""), 180), clean_category(item.get("category", "participant")),
-                    code, checked,
-                    pay_status, pay_amount, pay_method, pay_reference, pay_at, pay_by,
-                    clean_text(item.get("created_at", ""), 64) or now,
-                    now  # force les postes déjà ouverts à recharger la liste restaurée
-                ))
-                participant_count += 1
-
-            if sync_columns:
-                for raw_operation in source.execute("SELECT op_id,event_id,participant_id,action,result_json,created_at FROM sync_operations"):
-                    item = dict(raw_operation)
-                    op_id = clean_text(item.get("op_id"), 100)
-                    event_id = clean_text(item.get("event_id"), 100)
-                    action = clean_text(item.get("action"), 30)
-                    if not op_id or event_id not in event_ids or action not in ("create", "checkin", "undo", "payment"):
-                        raise ValueError("La sauvegarde contient un historique de synchronisation invalide.")
-                    con.execute("INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) VALUES(?,?,?,?,?,?)", (
-                        op_id, event_id, clean_text(item.get("participant_id"), 100), action,
-                        clean_text(item.get("result_json", "{}"), 4000) or "{}",
-                        clean_text(item.get("created_at", ""), 64) or utc_now()
-                    ))
-                    operation_count += 1
-
-            if user_columns:
-                for raw_user in source.execute("SELECT id,username,password_salt,password_hash,role,active,created_at,updated_at FROM users"):
+                con.execute(
+                    """INSERT INTO participants(
+                        id,event_id,name,email,company,category,code,checked_in_at,
+                        payment_status,payment_amount,payment_method,payment_reference,
+                        payment_confirmed_at,payment_confirmed_by,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (person_id, event_id, name, clean_text(item.get("email", ""), 180), clean_text(item.get("company", ""), 180),
+                     clean_category(item.get("category", "participant")), code,
+                     clean_text(item.get("checked_in_at", ""), 64) or None,
+                     pay_status, pay_amount,
+                     clean_payment_method(item.get("payment_method")) if pay_status == "paid" else "",
+                     clean_text(item.get("payment_reference", ""), 120) if pay_status == "paid" else "",
+                     (clean_text(item.get("payment_confirmed_at", ""), 64) or now) if pay_status != "unpaid" else None,
+                     clean_text(item.get("payment_confirmed_by", ""), 80) if pay_status != "unpaid" else "",
+                     clean_text(item.get("created_at", ""), 64) or now, now),
+                )
+            if "users" in tables:
+                for raw_user in source.execute("SELECT * FROM users"):
                     item = dict(raw_user)
                     username = normalize_username(item.get("username"))
                     salt = clean_text(item.get("password_salt"), 128)
-                    password_hash = clean_text(item.get("password_hash"), 128)
+                    digest = clean_text(item.get("password_hash"), 128)
                     role = clean_text(item.get("role"), 20)
                     try:
-                        salt_bytes, hash_bytes = bytes.fromhex(salt), bytes.fromhex(password_hash)
+                        salt_bytes, hash_bytes = bytes.fromhex(salt), bytes.fromhex(digest)
                     except ValueError:
-                        skipped_users += 1
                         continue
                     if (not re.fullmatch(r"[a-z0-9._-]{3,40}", username) or role not in ("admin", "desk")
                             or len(salt_bytes) != 16 or len(hash_bytes) != 32):
-                        skipped_users += 1
                         continue
-                    before = con.total_changes
-                    values = (
-                        clean_text(item.get("id"), 100) or "usr-" + uuid.uuid4().hex,
-                        username, salt, password_hash, role, int(bool(item.get("active", 1))),
-                        clean_text(item.get("created_at", ""), 64) or utc_now(),
-                        clean_text(item.get("updated_at", ""), 64) or utc_now()
+                    con.execute(
+                        "INSERT INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                        (clean_text(item.get("id"), 100) or "usr-" + uuid.uuid4().hex, username, salt, digest, role,
+                         int(bool(item.get("active", 1))), clean_text(item.get("created_at", ""), 64) or now,
+                         clean_text(item.get("updated_at", ""), 64) or now),
                     )
-                    if con.backend == "postgres":
-                        # Pas de « INSERT OR IGNORE » en PostgreSQL : on isole la ligne
-                        # dans un point de sauvegarde et on ignore un conflit d’identifiant.
-                        con.execute("SAVEPOINT user_import")
-                        try:
-                            con.execute("INSERT INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", values)
-                            con.execute("RELEASE SAVEPOINT user_import")
-                            imported_users += 1
-                        except DB_INTEGRITY_ERRORS:
-                            con.execute("ROLLBACK TO SAVEPOINT user_import")
-                            skipped_users += 1
-                    else:
-                        con.execute("INSERT OR IGNORE INTO users(id,username,password_salt,password_hash,role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", values)
-                        if con.total_changes > before:
-                            imported_users += 1
-                        else:
-                            skipped_users += 1
-
             con.commit()
             self.json(200, {
-                "ok": True, "events": event_count, "participants": participant_count,
-                "syncOperations": operation_count, "accountsAdded": imported_users,
-                "accountsSkipped": skipped_users,
-                "message": "Les événements et participants ont été remplacés. Les comptes actuels sont conservés; les sessions de la sauvegarde ne sont pas importées."
+                "ok": True,
+                "message": "Base SQLite restaurée. Les comptes de la sauvegarde sont actifs ; reconnectez-vous si nécessaire.",
             })
-        except sqlite3.DatabaseError as exc:
-            if con is not None:
-                con.rollback()
-            raise ValueError("La sauvegarde SQLite est illisible/incompatible ou la base est occupée; aucun changement n’a été appliqué.") from exc
         except Exception:
             if con is not None:
                 con.rollback()
@@ -1236,7 +1748,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/backup/import":
                 if not self.require_admin(user):
                     return
-                self.import_database_backup()
+                self.import_database_backup(user)
                 return
             if path == "/api/users":
                 if not self.require_admin(user): return

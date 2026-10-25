@@ -39,7 +39,7 @@ Chaque congrès possède une devise (TND par défaut, modifiable dans ses param�
 
 Chaque confirmation est horodatée et enregistrée au nom de l’agent connecté; les autres postes reçoivent le changement en quelques secondes. En cas de coupure, la confirmation rejoint la file locale du navigateur puis est synchronisée automatiquement. Le desk peut toujours confirmer les arrivées : un avertissement rappelle simplement qu’un inscrit n’a pas de paiement confirmé, sans bloquer l’accueil.
 
-Le tableau de bord affiche le nombre de paiements confirmés et le montant encaissé, l’onglet **Rapports** détaille les encaissements (statut, montant, moyen, référence, date, agent) et l’export CSV contient le détail du paiement pour chaque inscrit. Les paiements sont inclus dans les sauvegardes SQLite exportées depuis **Comptes**.
+Le tableau de bord affiche le nombre de paiements confirmés et le montant encaissé, l’onglet **Rapports** détaille les encaissements (statut, montant, moyen, référence, date, agent) et l’export CSV contient le détail du paiement pour chaque inscrit. Les paiements sont inclus dans la sauvegarde `.zip` exportée depuis **Comptes**.
 
 ## Plusieurs postes et mode de secours
 
@@ -56,8 +56,9 @@ L’application fonctionne avec **SQLite par défaut** (zéro installation) et b
 | `PORT` / `HOST` | écoute du serveur (`0.0.0.0` par défaut) |
 | `COOKIE_SECURE=1` | cookie de session limité à HTTPS (hébergement) |
 | `IMAGINE_SETUP_TOKEN` | code exigé pour créer le premier administrateur |
+| `IMAGINE_DB_EXPIRES_AT` | date d’échéance de la base (`AAAA-MM-JJ`) : l’application alerte 7 jours avant (base Render gratuite) |
 
-Le moteur réellement utilisé est visible sur `/api/health` (`"storage":"postgres"` ou `"sqlite"`) et dans **Comptes → Où sont mes données**. La sauvegarde depuis **Comptes** produit un `.sql` en PostgreSQL et un `.sqlite3` en SQLite. Guide Render détaillé : `RENDER-DEMO.md`.
+Le moteur réellement utilisé est visible sur `/api/health` (`"storage":"postgres"` ou `"sqlite"`) et dans **Comptes → Où sont mes données**. La sauvegarde depuis **Comptes** produit un fichier `.zip` identique dans les deux moteurs, restaurable depuis le navigateur (voir « Sauvegarder et restaurer » plus bas). Guide Render détaillé : `RENDER-DEMO.md`.
 
 ## Où sont enregistrées les données
 
@@ -91,9 +92,23 @@ Comptes créés : `demo.accueil` / `DemoAccueil2026!` (admin) et `desk.accueil` 
 
 Le projet contient un `Dockerfile` et un `render.yaml` (Blueprint) pour Render. Le fichier crée une **base PostgreSQL `imagine-events-db`** et la relie au service via `DATABASE_URL` : les congrès, inscrits et paiements y sont conservés et survivent aux redéploiements. Instructions détaillées : `RENDER-DEMO.md`.
 
-Attention aux offres gratuites : la base PostgreSQL gratuite de Render **expire** (de l’ordre de 30 jours) et est supprimée ensuite; le web service gratuit s’endort après inactivité. Pour un vrai congrès, prévoir les offres payantes correspondantes et exporter une sauvegarde `.sql` avant chaque événement. Sans `DATABASE_URL`, l’application retombe sur SQLite dans le conteneur : les données sont alors perdues à chaque redémarrage, et l’interface le signale explicitement.
+Attention aux offres gratuites : la base PostgreSQL gratuite de Render **expire** (de l’ordre de 30 jours) et est supprimée ensuite; le web service gratuit s’endort après inactivité. Pour un vrai congrès, prévoir les offres payantes correspondantes et exporter une sauvegarde `.zip` avant chaque événement (procédure de rotation complète dans `RENDER-DEMO.md`). Sans `DATABASE_URL`, l’application retombe sur SQLite dans le conteneur : les données sont alors perdues à chaque redémarrage, et l’interface le signale explicitement.
 
-Dans **Comptes** (Admin), les boutons **Exporter la base** et **Importer une base** permettent de télécharger une sauvegarde SQLite et de restaurer un ancien fichier `.sqlite3`, `.sqlite` ou `.db` (50 Mo maximum). L’import remplace les congrès/participants, conserve les comptes du serveur et n’importe jamais les sessions. C’est une sauvegarde manuelle : le fichier doit être téléchargé avant la perte des données et gardé hors de Render. Protégez-le, car il contient les empreintes des mots de passe.
+## Sauvegarder et restaurer la base (ZIP, depuis le navigateur)
+
+Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande — en PostgreSQL comme en SQLite.
+
+**Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
+
+- `manifest.json` (format, version, moteur, date, nombre de lignes) ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements), `04_sync_operations.csv` — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
+- `INSTRUCTIONS.txt`.
+
+Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.
+
+**Restaurer une sauvegarde** : choisir le `.zip`, saisir **son propre mot de passe** pour confirmer, puis valider. Le serveur vérifie tout le fichier (format, manifeste, doublons, références, empreintes) **avant** d’écrire, puis remplace congrès, inscrits, paiements, comptes et historique en **une seule transaction** : au moindre problème, rien n’est modifié. Le compte qui restaure reste administrateur et conserve son mot de passe, les sessions des autres appareils sont fermées, et un seul compte administrateur suffit.
+
+Limites : 50 Mo compressé, 150 Mo décompressé, 50 Mo par fichier, 50 entrées maximum. Un ZIP sur mesure ne sert à rien : seuls les fichiers et les colonnes du manifeste sont lus.
 
 Render accepte des dépôts Git connectés et des images Docker préconstruites. Ne jamais publier le fichier `data/imagine_desk.sqlite3`; si GitHub est indisponible, utiliser un dépôt GitLab/Bitbucket autorisé ou une image de registre, sans mettre de données réelles dans l’image.
 
