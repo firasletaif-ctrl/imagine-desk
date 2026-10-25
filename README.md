@@ -19,9 +19,43 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 ## Comptes et permissions
 
 - **Administrateur** : crée et archive les congrès, importe les listes, gère les comptes et les mots de passe.
-- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès) et ajoute un participant au desk.
+- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
+- **Corbeille** : la suppression est ouverte à **tous les comptes** et reste réversible ; seul l’administrateur peut **effacer définitivement** (voir « Supprimer ou restaurer un inscrit »).
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
 - Les mots de passe ne doivent pas être partagés. Au premier test dans l’aperçu, utilisez un mot de passe provisoire, pas votre mot de passe personnel.
+
+## Supprimer ou restaurer un inscrit (corbeille)
+
+**Tout le monde** (administrateur et agent desk) peut retirer un inscrit, mais rien n’est jamais
+détruit immédiatement : l’inscrit part dans la **corbeille** du congrès.
+
+- **Un inscrit à la fois** : icône corbeille sur sa ligne (ou bouton **Corbeille** dans sa fiche).
+- **Plusieurs à la fois** : cochez les cases de la colonne de gauche (la case d’en-tête sélectionne
+  tout ce qui est affiché, filtres et recherche compris), puis **Mettre à la corbeille**.
+- Une fenêtre récapitule les noms concernés avant de valider.
+
+Un inscrit supprimé disparaît **partout** : liste, filtres et compteurs, tableau de bord, rapports,
+page Badges et impression, export CSV, totaux du congrès. Son **code badge reste réservé** pendant
+qu’il est dans la corbeille, pour qu’une restauration soit toujours possible.
+
+**Onglet Participants → Corbeille** (le compteur rouge indique le nombre d’inscrits) :
+
+- **Restaurer** (tous les comptes) : l’inscrit revient exactement comme avant, avec son arrivée et son
+  paiement. Réimporter une ligne dont l’e-mail ou le code correspond à un inscrit de la corbeille le
+  restaure aussi.
+- **Effacer définitivement** / **Vider la corbeille** (administrateur uniquement, case de confirmation
+  obligatoire) : la suppression devient irréversible.
+
+Points à connaître :
+
+- un congrès **archivé** refuse suppression et restauration : réactivez-le d’abord ;
+- les actions sont tracées (qui, quand) et la sauvegarde ZIP conserve la corbeille
+  (`deleted_at` / `deleted_by` dans `03_participants.csv`) : restaurer une sauvegarde restitue aussi
+  les inscrits supprimés ;
+- la suppression demande une connexion au serveur (contrairement au check-in et au paiement, qui
+  fonctionnent hors ligne) ;
+- les sauvegardes antérieures à la version 5 restent valides : leurs inscrits sont simplement tous
+  considérés comme actifs.
 
 ## Import CSV ou Excel
 
@@ -204,7 +238,7 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
 - `manifest.json` (format, version, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.
