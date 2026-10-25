@@ -2,7 +2,7 @@
 
 const STORAGE_KEY = 'imagine-events-desk-platform-v1';
 const categoryNames = { participant:'Participant', vip:'VIP', speaker:'Intervenant', press:'Presse', team:'Équipe' };
-const defaultStore = { events:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
+const defaultStore = { events:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
 function loadStore(){
   try { const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null'); if(saved&&typeof saved==='object') return {...defaultStore,...saved,events:Array.isArray(saved.events)?saved.events:[],peopleByEvent:saved.peopleByEvent||{},cursorByEvent:saved.cursorByEvent||{},queueByEvent:saved.queueByEvent||{},pricesByEvent:saved.pricesByEvent||{},deviceId:saved.deviceId||''}; }
   catch(e){ console.warn('Cache locale non disponible.',e); }
@@ -59,7 +59,7 @@ function icon(name,size=16){
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${g[name]||g.info}</svg>`;
 }
 function renderStaticIcons(){ $$('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);}); }
-function saveStore(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(store));}catch(e){console.warn('Impossible d’enregistrer le cache local.',e);}}
+function saveStore(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(store));}catch(e){try{const trimmed={...store,badgeTemplatesByEvent:{}};localStorage.setItem(STORAGE_KEY,JSON.stringify(trimmed));console.warn('Visuels de badge trop lourds pour le cache local : ils restent en mémoire et sur le serveur.',e);}catch(inner){console.warn('Impossible d’enregistrer le cache local.',inner);}}}
 function getEvent(id=store.activeEventId){return store.events.find(e=>String(e.id)===String(id))||null;}
 function getPeople(eventId=store.activeEventId){if(!eventId)return []; if(!Array.isArray(store.peopleByEvent[eventId]))store.peopleByEvent[eventId]=[];return store.peopleByEvent[eventId];}
 function getQueue(eventId=store.activeEventId){if(!eventId)return [];if(!Array.isArray(store.queueByEvent[eventId]))store.queueByEvent[eventId]=[];return store.queueByEvent[eventId];}
@@ -187,8 +187,6 @@ function peopleFilterCounts(){const p=getPeople();return {all:p.length,pending:p
 function renderPeople(){const counts=peopleFilterCounts();const filters=[['all','Tous',counts.all],['pending','À accueillir',counts.pending],['arrived','Arrivés',counts.arrived],['unpaid','Paiement à confirmer',counts.unpaid],['paid','Payés',counts.paid],['vip','VIP',counts.vip],['speaker','Intervenants',counts.speaker]];return `${pendingTotal()?noticeHTML('warning',`<strong>${pendingTotal()} action(s) hors ligne en attente.</strong> Elles seront synchronisées à la reconnexion.`):''}<div class="toolbar"><div class="search-wrap">${icon('search')}<input id="peopleSearch" class="search-input" value="${esc(peopleQuery)}" autocomplete="off" placeholder="Nom, e-mail, organisation ou code badge…" aria-label="Rechercher un participant"></div><span class="count-label" id="peopleCount"></span></div><div class="filters">${filters.map(([id,label,count])=>`<button class="filter ${peopleFilter===id?'active':''}" type="button" data-filter="${id}">${label}<b>${count}</b></button>`).join('')}</div><section class="table-card"><div class="table-scroll"><table><thead><tr><th>Participant</th><th>Catégorie</th><th>Code badge</th><th>Statut</th><th>Paiement</th><th>Heure</th><th style="text-align:right">Actions</th></tr></thead><tbody id="peopleRows"></tbody></table></div></section><div class="footnote">${icon('info')}<span>La recherche rapide accepte les codes que vos lecteurs USB/QR transmettent au champ. La colonne « Paiement » permet de confirmer un encaissement, y compris hors ligne. Les badges de cette version affichent le code en texte, sans QR ni code-barres.</span></div>`;}
 function filteredPeople(){const query=norm(peopleQuery);return getPeople().filter(p=>{const match=peopleFilter==='all'||(peopleFilter==='pending'&&!p.checkedIn)||(peopleFilter==='arrived'&&p.checkedIn)||(peopleFilter==='unpaid'&&needsPayment(p))||(peopleFilter==='paid'&&paymentOf(p).status==='paid')||p.category===peopleFilter;const hay=[p.name,p.email,p.company,p.code,displayCategory(p.category),paymentStatusNames[paymentOf(p).status]].join(' ').toLocaleLowerCase('fr');return match&&(!query||hay.includes(query));}).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));}
 function renderPeopleRows(){const tbody=$('#peopleRows');if(!tbody)return;const list=filteredPeople();const count=$('#peopleCount');if(count)count.textContent=`${list.length} résultat${list.length===1?'':'s'} · ${getPeople().length} inscrit${getPeople().length===1?'':'s'}`;if(!list.length){tbody.innerHTML=`<tr><td colspan="7"><div class="empty-state"><strong>${getPeople().length?'Aucun participant trouvé':'Votre liste est vide'}</strong>${getPeople().length?'Essayez une autre recherche ou un autre filtre.':'Importez un CSV/Excel (.xlsx) ou ajoutez un participant.'}</div></td></tr>`;return;}tbody.innerHTML=list.map(p=>`<tr><td><div class="table-person"><span class="avatar">${esc(initials(p.name))}</span><span class="table-person-copy"><button type="button" data-action="details" data-id="${esc(p.id)}">${esc(p.name)}</button><small>${esc(p.email||p.company||'—')}</small></span></div></td><td><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></td><td><span class="code">${esc(p.code||'—')}</span></td><td><span class="status-badge ${p.checkedIn?'arrived':'pending'}"><i></i>${p.checkedIn?'Arrivé':'À accueillir'}</span></td><td>${paymentChipHTML(p)}</td><td>${p.checkedIn?`<span class="time-label">${esc(localTime(p.checkedInAt))}</span>`:'<span style="color:#c4cbd4">—</span>'}</td><td><div class="row-actions"><button class="icon-action" type="button" data-action="badge" data-id="${esc(p.id)}" title="Aperçu badge" aria-label="Aperçu badge">${icon('badge',13)}</button>${p.checkedIn?`<button class="table-action undo" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler</button>`:`<button class="table-action" type="button" data-action="checkin" data-id="${esc(p.id)}" ${getEvent()?.status==='archived'?'disabled':''}>${icon('check',12)}Confirmer</button>`}</div></td></tr>`).join('');}
-function badgeHTML(person){const ev=getEvent();return `<div class="badge-preview"><div class="badge-brand"><span class="badge-brand-mark">IE</span><span>IMAGINE EVENTS</span></div><div class="badge-person"><h3>${esc(person.name)}</h3><p>${esc(person.company||'Participant')}</p><span class="cat-badge ${categoryClass(person.category)}">${esc(displayCategory(person.category))}</span></div><div class="badge-bottom"><span>${esc((ev?.name||'CONGRÈS').toLocaleUpperCase('fr-TN'))}</span><code>${esc(person.code||'—')}</code></div></div>`;}
-function renderBadges(){const canManage=authUser?.role==='admin';const list=getPeople().filter(p=>!badgeQuery||[p.name,p.company,p.code,displayCategory(p.category)].join(' ').toLocaleLowerCase('fr').includes(norm(badgeQuery)));return `<div class="badge-tools"><div class="badge-tools-main"><span class="badge-tools-icon">${icon('printer',17)}</span><span><strong>Badge nominatif · format 90 × 60 mm</strong><small>Code imprimé en texte (pas de QR/code-barres). Testez le papier et l’échelle avant le tirage.</small></span></div>${canManage?`<button class="btn btn-secondary" type="button" data-action="templates">${icon('file')}Modèles CSV / Excel</button>`:''}</div><div class="toolbar"><div class="search-wrap">${icon('search')}<input id="badgeSearch" class="search-input" value="${esc(badgeQuery)}" placeholder="Rechercher un participant…" autocomplete="off" aria-label="Filtrer les badges"></div><span class="count-label">${list.length} badge${list.length===1?'':'s'}</span></div>${list.length?`<div class="badge-grid">${list.map(p=>`<article class="badge-item">${badgeHTML(p)}<div class="badge-meta"><strong>${esc(p.name)}</strong><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></div><div class="badge-buttons"><button class="btn btn-secondary btn-sm" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('eye',12)}Aperçu</button><button class="btn btn-primary btn-sm" type="button" data-action="print-badge" data-id="${esc(p.id)}">${icon('printer',12)}Imprimer</button></div></article>`).join('')}</div>`:`<div class="table-card"><div class="empty-state"><strong>${getPeople().length?'Aucun résultat':'Aucun participant à afficher'}</strong>Importez ou ajoutez des inscrits pour préparer les badges.</div></div>`}<div class="footnote">${icon('info')}<span>L’impression se lance depuis le navigateur. Choisissez une imprimante compatible avec le format 90 × 60 mm.</span></div>`;}
 function paymentRowsHTML(){
   const settled=getPeople().filter(p=>paymentOf(p).status!=='unpaid').slice().sort((a,b)=>String(b.paymentConfirmedAt||'').localeCompare(String(a.paymentConfirmedAt||'')));
   if(!settled.length)return '<tr><td colspan="8"><div class="empty-state">Aucun paiement confirmé pour le moment.</div></td></tr>';
@@ -240,8 +238,9 @@ async function enterWorkspace(user,offline=false){
   if(!offline)apiOnline=true;else apiOnline=false;
   render();
   if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-  if(navigator.onLine){await refreshEvents(true);chooseActiveEvent();if(store.activeEventId){await Promise.all([refreshParticipants(store.activeEventId,!store.cursorByEvent[store.activeEventId]),loadPrices(store.activeEventId)]);await syncQueue(store.activeEventId);}}
+  if(navigator.onLine){await refreshEvents(true);chooseActiveEvent();if(store.activeEventId){await Promise.all([refreshParticipants(store.activeEventId,!store.cursorByEvent[store.activeEventId]),loadPrices(store.activeEventId),loadBadgeTemplates(store.activeEventId)]);await syncQueue(store.activeEventId);}}
   saveStore();render();
+  await focusBadgeFromQuery();
   if(pollTimer)clearInterval(pollTimer);
   pollTimer=setInterval(async()=>{if(!authUser)return;if(!navigator.onLine){apiOnline=false;updateStatus();return;}if(store.activeEventId)await syncQueue(store.activeEventId);await refreshParticipants(store.activeEventId,false);if(Date.now()-lastEventsRefresh>12000)await refreshEvents(true);},3500);
 }
@@ -430,7 +429,14 @@ async function applyPayment(personId,payload){
   return true;
 }
 
-function openBadgeModal(id){const p=findPerson(id);if(!p)return;openModal(`<div class="modal-head"><div><h2>Aperçu du badge</h2><p>Vérifiez le nom et la catégorie avant impression.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="modal-badge">${badgeHTML(p)}</div><div class="field-hint" style="margin-top:11px;text-align:center">Format prévu : 90 × 60 mm · code en texte, sans QR/code-barres.</div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-primary" type="button" data-action="print-badge" data-id="${esc(p.id)}">${icon('printer')}Imprimer</button></div>`,true);}
+function openBadgeModal(id){
+  const person=findPerson(id);
+  if(!person)return;
+  const model=activeBadgeTemplate();
+  const format=`${Number(model?.format?.width||90)} × ${Number(model?.format?.height||60)} mm`;
+  const back=badgeHasBack(model)?`<div class="field-hint" style="margin:14px 0 6px;text-align:center">Verso</div><div class="modal-badge">${badgeFrame(person,model,'back')}</div>`:'';
+  openModal(`<div class="modal-head"><div><h2>Aperçu du badge</h2><p>Modèle « ${esc(model?.name||'Modèle de test')} » · ${format}${back?' · recto-verso':''}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="modal-badge">${badgeFrame(person,model,'front')}</div>${back}<div class="field-hint" style="margin-top:11px;text-align:center">${model?.qrMode==='url'?`QR code : ${esc(qrPayload(person,model))}`:'Le QR code contient la référence du badge'} · rendu à l’échelle de l’impression.</div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-secondary" type="button" data-action="badge-studio">${icon('file')}Modifier le modèle</button><button class="btn btn-primary" type="button" data-action="print-badge" data-id="${esc(person.id)}">${icon('printer')}Imprimer</button></div>`,true);
+}
 function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
 async function openAccountsModal(){
   if(authUser?.role!=='admin'){showToast('Seul l’administrateur peut gérer les comptes.');return;}
@@ -471,7 +477,6 @@ async function logout(){
   authUser=null;store.cachedUser=null;store.authCachedAt=0;store.logoutPending=!serverLogout;if(!queued){store.peopleByEvent={};store.cursorByEvent={};}saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
   renderAuthScreen('login',serverLogout?'Vous êtes déconnecté. Les actions hors ligne restent sauvegardées sur cet appareil.':'Déconnexion locale effectuée. La session serveur sera fermée dès le retour de la connexion.');
 }
-function printBadge(id){const p=findPerson(id);if(!p)return;$('#printArea').innerHTML=badgeHTML(p);closeModal();setTimeout(()=>window.print(),80);}
 function downloadFile(filename,content,type='text/csv;charset=utf-8'){const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1200);}
 function csvCell(v){return `"${String(v??'').replace(/"/g,'""')}"`;}
 function exportCSV(){const event=getEvent();if(!event){showToast('Sélectionnez un congrès avant l’export.');return;}const headers=['Nom complet','E-mail','Organisation','Catégorie','Code badge','Statut','Heure d’arrivée','Paiement','Montant payé',`Devise`,'Tarif appliqué','Moyen de paiement','Référence paiement','Paiement confirmé le','Paiement confirmé par','Synchronisation'];const q=getQueue(event.id);const rows=getPeople(event.id).map(p=>{const pay=paymentOf(p);return [p.name,p.email,p.company,displayCategory(p.category),p.code,p.checkedIn?'Arrivé':'À accueillir',p.checkedIn?localTime(p.checkedInAt):'',paymentStatusNames[pay.status],pay.status==='paid'?String(pay.amount).replace('.',','):'',pay.status==='paid'?eventCurrency(event):'',pay.status==='paid'?pay.tariff:'',pay.method?paymentMethodNames[pay.method]:'',pay.reference,pay.at?dateTimeLabel(pay.at):'',pay.by,q.some(op=>op.participantId===p.id)?'En attente':'À jour'];});const csv='\uFEFF'+[headers,...rows].map(r=>r.map(csvCell).join(';')).join('\r\n');const slug=event.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'congres';downloadFile(`imagine-events-${slug}-presences.csv`,csv);showToast('Rapport CSV téléchargé avec le détail des paiements.');}
@@ -566,6 +571,658 @@ async function importFile(file){
 function generateBadgeCode(){return `IE-${makeId('badge').replace(/[^a-z0-9]/gi,'').slice(-7).toUpperCase()}`;}
 async function quickCheckin(query){const event=getEvent();if(!event){showToast('Créez ou sélectionnez un congrès avant le check-in.');return;}const q=norm(query);if(!q){showToast('Saisissez un nom, un e-mail ou un code badge.');return;}if(event.status==='archived'){showToast('Cet événement est archivé. Réactivez-le avant d’accueillir des participants.');return;}const list=getPeople();let exact=list.find(p=>[p.code,p.email].some(x=>norm(x)===q));if(exact){await performCheckin(exact.id,'checkin');return;}const found=list.filter(p=>[p.name,p.email,p.company,p.code].some(x=>norm(x).includes(q)));if(found.length===1){await performCheckin(found[0].id,'checkin');return;}peopleQuery=String(query).trim();setPage('people');setTimeout(()=>$('#peopleSearch')?.focus(),50);showToast(found.length?`${found.length} résultats : vérifiez l’identité avant de confirmer.`:'Aucun inscrit trouvé dans le cache de cet appareil. Vérifiez la liste ou reconnectez-vous.');}
 
+/* ═══════════════════════════════════════════════════════════════════
+   Modèles de badge : fond importé, champs placés à la souris, format
+   libre, recto/verso, QR code généré hors ligne et impression sur une
+   planche A4 (y compris une feuille déjà partiellement utilisée).
+   ═══════════════════════════════════════════════════════════════════ */
+const BADGE_FIELD_LABELS={name:'Nom',company:'Organisation',category:'Catégorie',event:'Congrès',code:'Référence',qr:'QR code',text:'Texte libre'};
+const BADGE_SAMPLE_PERSON={id:'demo',name:'Amira Ben Salem',company:'Clinique Pasteur',category:'vip',code:'IE-0101',checkedIn:false};
+const A4={width:210,height:297};
+const BADGE_QR_OPTIONS={cellSize:4,margin:16,scalable:true,alt:''};
+
+function defaultBadgeFields(){
+  return [
+    {key:'event',x:6,y:7,w:62,size:4.6,weight:700,color:'#C41E3A',align:'left',uppercase:1,text:''},
+    {key:'name',x:6,y:24,w:86,size:12.5,weight:800,color:'#0B1D3A',align:'left',uppercase:0,text:''},
+    {key:'company',x:6,y:55,w:62,size:6.2,weight:600,color:'#3F4F68',align:'left',uppercase:0,text:''},
+    {key:'category',x:6,y:65,w:45,size:4.6,weight:700,color:'#0B1D3A',align:'left',uppercase:1,text:''},
+    {key:'code',x:6,y:84,w:34,size:5.5,weight:800,color:'#0B1D3A',align:'left',uppercase:0,text:''},
+    {key:'qr',x:71,y:53,w:24,size:20,weight:600,color:'#0B1D3A',align:'center',uppercase:0,text:''}
+  ];
+}
+function defaultBadgeTemplate(){
+  return {id:'',name:'Modèle de test',format:{width:90,height:60},front:{image:'',fields:defaultBadgeFields()},back:{image:'',fields:[]},qrMode:'code',qrPrefix:'',isDefault:true};
+}
+function badgeTemplatesForEvent(eventId=store.activeEventId){
+  const list=store.badgeTemplatesByEvent?.[eventId];
+  return Array.isArray(list)&&list.length?list:[defaultBadgeTemplate()];
+}
+function activeBadgeTemplate(eventId=store.activeEventId){
+  const list=badgeTemplatesForEvent(eventId);
+  return list.find(template=>template.isDefault)||list[0];
+}
+function badgeTemplateById(id,eventId=store.activeEventId){
+  return badgeTemplatesForEvent(eventId).find(template=>String(template.id)===String(id))||null;
+}
+async function loadBadgeTemplates(eventId=store.activeEventId,silent=true){
+  if(!eventId||!navigator.onLine)return badgeTemplatesForEvent(eventId);
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(eventId)}/badges`);
+    if(Array.isArray(data.templates)&&data.templates.length){
+      store.badgeTemplatesByEvent=store.badgeTemplatesByEvent||{};
+      store.badgeTemplatesByEvent[eventId]=data.templates;
+      saveStore();
+    }
+    return badgeTemplatesForEvent(eventId);
+  }catch(error){
+    if(!silent)showToast(error.message||'Impossible de charger les modèles de badge.');
+    return badgeTemplatesForEvent(eventId);
+  }
+}
+function sanitizeBadgeTemplate(template){
+  return {
+    name:String(template?.name||'Modèle').slice(0,80),
+    format:{width:Number(template?.format?.width||90),height:Number(template?.format?.height||60)},
+    front:{image:String(template?.front?.image||''),fields:Array.isArray(template?.front?.fields)?template.front.fields:[]},
+    back:{image:String(template?.back?.image||''),fields:Array.isArray(template?.back?.fields)?template.back.fields:[]},
+    qrMode:template?.qrMode==='url'?'url':'code',
+    qrPrefix:String(template?.qrPrefix||'').slice(0,300),
+    isDefault:!!template?.isDefault
+  };
+}
+async function persistBadgeTemplates(eventId,templates){
+  const payload=(templates||[]).map(sanitizeBadgeTemplate);
+  if(!payload.length)throw new Error('Aucun modèle à enregistrer.');
+  if(!payload.some(template=>template.isDefault))payload[0].isDefault=true;
+  const data=await api(`/api/events/${encodeURIComponent(eventId)}/badges`,{method:'PUT',body:JSON.stringify({templates:payload})});
+  store.badgeTemplatesByEvent=store.badgeTemplatesByEvent||{};
+  if(Array.isArray(data.templates)&&data.templates.length)store.badgeTemplatesByEvent[eventId]=data.templates;
+  saveStore();
+  return data;
+}
+function qrPayload(person,template){
+  const code=String(person?.code||'').trim();
+  if(!code)return '';
+  if((template?.qrMode||'code')!=='url')return code;
+  let prefix=String(template?.qrPrefix||'').trim();
+  if(!prefix)prefix=`${location.origin||''}/p/`;
+  if(prefix.includes('{code}'))return prefix.replace('{code}',encodeURIComponent(code));
+  return prefix.replace(/\/?$/,'/')+encodeURIComponent(code);
+}
+function qrSvgMarkup(payload){
+  if(!payload||typeof qrcode!=='function')return '';
+  try{
+    const qr=qrcode(0,'M');
+    qr.addData(String(payload));
+    qr.make();
+    return qr.createSvgTag(BADGE_QR_OPTIONS);
+  }catch(error){return '';}
+}
+function badgeFieldText(person,field){
+  switch(field.key){
+    case 'name':return person?.name||'';
+    case 'company':return person?.company||'';
+    case 'category':return person?.category?displayCategory(person.category):'';
+    case 'event':return getEvent()?.name||'';
+    case 'code':return person?.code||'';
+    default:return field.text||'';
+  }
+}
+function renderBadgeMarkup(person,template,side='front',options={}){
+  const model=template||defaultBadgeTemplate();
+  const face=(model[side]&&typeof model[side]==='object')?model[side]:{image:'',fields:[]};
+  const width=Number(model?.format?.width||90)||90;
+  const height=Number(model?.format?.height||60)||60;
+  const dims=options.preview?'width:100%;height:100%':`width:${width}mm;height:${height}mm`;
+  const mirror=!!options.mirror;
+  const fields=(Array.isArray(face.fields)?face.fields:[]).map(field=>{
+    const boxWidth=Number(field.w||20);
+    const left=mirror?Math.max(0,100-Number(field.x||0)-boxWidth):Number(field.x||0);
+    const size=Math.max(1,Number(field.size||8));
+    const style=`left:${left.toFixed(2)}%;top:${Number(field.y||0).toFixed(2)}%;width:${boxWidth.toFixed(2)}%;font-size:calc(${height}mm * ${(size/100).toFixed(4)});font-size:${size.toFixed(2)}cqh;font-weight:${Number(field.weight||600)};color:${esc(field.color||'#0B1D3A')};text-align:${['left','center','right'].includes(field.align)?field.align:'left'};${field.uppercase?'text-transform:uppercase;':''}`;
+    if(field.key==='qr'){
+      const svg=qrSvgMarkup(qrPayload(person,model));
+      return `<div class="bd-field bd-qr" data-field="qr" style="${style}">${svg||'<span class="bd-qr-missing">QR</span>'}</div>`;
+    }
+    return `<div class="bd-field" data-field="${esc(field.key)}" style="${style}">${esc(badgeFieldText(person,field))}</div>`;
+  }).join('');
+  const background=face.image?`<img class="bd-bg" src="${face.image}" alt="">`:'';
+  return `<div class="bd ${esc(options.extraClass||'')}" style="${dims}">${background}${fields}</div>`;
+}
+function badgeHasBack(template){
+  const back=template?.back;
+  return !!(back&&((back.image&&String(back.image).length)||(Array.isArray(back.fields)&&back.fields.length)));
+}
+function badgeFrame(person,template,side='front',extra=''){
+  const model=template||activeBadgeTemplate();
+  const width=Number(model?.format?.width||90)||90;
+  const height=Number(model?.format?.height||60)||60;
+  return `<div class="bd-frame ${esc(extra)}" style="aspect-ratio:${width}/${height}">${renderBadgeMarkup(person,model,side,{preview:true})}</div>`;
+}
+function badgeHTML(person,template,side='front'){return badgeFrame(person,template||activeBadgeTemplate(),side);}
+
+/* ── Page « Badges » ──────────────────────────────────────────────── */
+async function setDefaultBadgeTemplate(id){
+  const event=getEvent();
+  if(!event)return;
+  if(event.status==='archived'){showToast('Ce congrès est archivé. Réactivez-le pour changer de modèle.');return;}
+  const list=badgeTemplatesForEvent(event.id).map(template=>({...template,isDefault:String(template.id)===String(id)}));
+  store.badgeTemplatesByEvent=store.badgeTemplatesByEvent||{};
+  store.badgeTemplatesByEvent[event.id]=list;
+  saveStore();
+  render();
+  try{await persistBadgeTemplates(event.id,list);showToast('Modèle de badge actif mis à jour.');}
+  catch(error){showToast(error.message||'Modèle non enregistré sur le serveur.');}
+}
+function renderBadges(){
+  const event=getEvent();
+  const templates=badgeTemplatesForEvent(event?.id);
+  const model=activeBadgeTemplate(event?.id);
+  const list=filteredBadgePeople();
+  const archived=event?.status==='archived';
+  const format=`${Number(model?.format?.width||90)} × ${Number(model?.format?.height||60)} mm`;
+  return `<div class="badge-tools"><div class="badge-tools-main"><span class="badge-tools-icon">${icon('badge',17)}</span><span><strong>${esc(model?.name||'Modèle de test')} · ${format}</strong><small>${badgeHasBack(model)?'Recto-verso · ':'Recto seul · '}${(model?.qrMode==='url')?'QR code vers le site':'QR code = référence du badge'} · champs placés dans l’atelier de modèle.</small></span></div><div class="badge-tools-actions">${templates.length>1?`<select id="badgeModelSelect" class="event-select" aria-label="Modèle de badge actif">${templates.map(template=>`<option value="${esc(template.id)}" ${template.isDefault?'selected':''}>${esc(template.name)}</option>`).join('')}</select>`:''}<button class="btn btn-secondary" type="button" data-action="badge-studio" ${archived?'disabled':''}>${icon('file')}Modèles de badge</button><button class="btn btn-primary" type="button" data-action="print-all" ${list.length?'':'disabled'}>${icon('printer')}Imprimer ${list.length} badge${list.length===1?'':'s'}</button></div></div>
+  <div class="toolbar"><div class="search-wrap">${icon('search')}<input id="badgeSearch" class="search-input" value="${esc(badgeQuery)}" placeholder="Rechercher un participant…" autocomplete="off" aria-label="Filtrer les badges"></div><span class="count-label">${list.length} badge${list.length===1?'':'s'}</span></div>
+  ${list.length?`<div class="badge-grid">${list.map(person=>`<article class="badge-item">${badgeHTML(person,model)}<div class="badge-meta"><strong>${esc(person.name)}</strong><span class="cat-badge ${categoryClass(person.category)}">${esc(displayCategory(person.category))}</span></div><div class="badge-buttons"><button class="btn btn-secondary btn-sm" type="button" data-action="badge" data-id="${esc(person.id)}">${icon('eye',12)}Aperçu</button><button class="btn btn-primary btn-sm" type="button" data-action="print-badge" data-id="${esc(person.id)}">${icon('printer',12)}Imprimer</button></div></article>`).join('')}</div>`:`<div class="table-card"><div class="empty-state"><strong>${getPeople().length?'Aucun résultat':'Aucun participant à afficher'}</strong>Importez ou ajoutez des inscrits pour préparer les badges.</div></div>`}
+  <div class="footnote">${icon('info')}<span>L’impression part du navigateur : choisissez « 100 % », marges « Aucune » et activez les graphiques d’arrière-plan pour conserver votre visuel.</span></div>`;
+}
+
+/* ── Atelier de modèle : import du visuel, placement des champs ────── */
+let studio=null;
+function studioTemplate(){
+  if(!studio)return null;
+  return studio.templates[studio.index]||null;
+}
+function studioFace(){
+  const model=studioTemplate();
+  if(!model)return null;
+  if(!model[studio.side]||typeof model[studio.side]!=='object')model[studio.side]={image:'',fields:[]};
+  if(!Array.isArray(model[studio.side].fields))model[studio.side].fields=[];
+  return model[studio.side];
+}
+function openBadgeStudio(index=0,side='front'){
+  const event=getEvent();
+  if(!event){showToast('Sélectionnez un congrès avant de créer un modèle de badge.');return;}
+  if(event.status==='archived'){showToast('Ce congrès est archivé. Réactivez-le pour modifier ses badges.');return;}
+  const list=JSON.parse(JSON.stringify(badgeTemplatesForEvent(event.id)));
+  studio={eventId:event.id,templates:list,index:Math.min(Math.max(index,0),list.length-1),side:side==='back'?'back':'front',selected:0,drag:null};
+  studioShellRender();
+}
+function studioShellRender(){
+  openModal(studioShell(),true);
+  $('#modalRoot .modal')?.classList.add('studio-modal');
+  bindStudioEvents();
+  renderStudio();
+}
+function studioShell(){
+  const model=studioTemplate();
+  const sample=getPeople()[0]||BADGE_SAMPLE_PERSON;
+  return `<div id="studioRoot"><div class="modal-head"><div><h2>Modèles de badge</h2><p>Importez votre visuel, puis placez chaque information à la souris : l’aperçu correspond à l’impression.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body studio-body">
+    <div class="studio-left">
+      <div class="studio-topbar">
+        <div class="studio-tabs"><button type="button" class="studio-tab ${studio.side==='front'?'active':''}" data-action="studio-side" data-side="front">Recto</button><button type="button" class="studio-tab ${studio.side==='back'?'active':''}" data-action="studio-side" data-side="back">Verso</button></div>
+        <span class="field-hint">Exemple : ${esc(sample.name||'—')} · ${esc(sample.code||'—')}</span>
+      </div>
+      <div class="studio-canvas-wrap"><div id="studioCanvas"></div></div>
+      <div class="field-hint studio-tip">Faites glisser un bloc pour le placer. Cliquez dessus pour régler taille, couleur et alignement.</div>
+    </div>
+    <div class="studio-right">
+      <div class="field"><label for="studioModelSelect">Modèle</label><select id="studioModelSelect">${studio.templates.map((item,i)=>`<option value="${i}" ${i===studio.index?'selected':''}>${esc(item.name||('Modèle '+(i+1)))}</option>`).join('')}</select></div>
+      <div class="studio-row"><button class="btn btn-secondary btn-sm" type="button" data-action="studio-new">${icon('plus')}Nouveau</button><button class="btn btn-secondary btn-sm" type="button" data-action="studio-duplicate">Dupliquer</button><button class="btn btn-danger btn-sm" type="button" data-action="studio-delete" ${studio.templates.length<2?'disabled':''}>Supprimer</button></div>
+      <div class="field"><label for="studioModelName">Nom du modèle</label><input id="studioModelName" maxlength="80" value="${esc(model?.name||'')}"></div>
+      <div class="studio-row2"><div class="field"><label for="studioFmtW">Largeur (mm)</label><input id="studioFmtW" type="number" min="30" max="300" step="0.5" value="${Number(model?.format?.width||90)}"></div><div class="field"><label for="studioFmtH">Hauteur (mm)</label><input id="studioFmtH" type="number" min="30" max="300" step="0.5" value="${Number(model?.format?.height||60)}"></div></div>
+      <label class="print-check"><input id="studioIsDefault" type="checkbox" ${model?.isDefault?'checked':''}> Utiliser ce modèle par défaut</label>
+      <div class="studio-block"><div class="studio-block-head"><strong>Fond du ${studio.side==='front'?'recto':'verso'}</strong><span class="field-hint">PNG, JPEG, WebP ou SVG</span></div><div class="studio-row"><label class="btn btn-secondary btn-sm studio-file">${icon('upload')}Importer mon visuel<input id="studioImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden></label><button class="btn btn-secondary btn-sm" type="button" data-action="studio-image-clear">Retirer</button></div><div class="field-hint" id="studioImageName">${studioFace()?.image?'Visuel importé pour cette face.':'Aucun visuel : fond blanc, les champs restent imprimés.'}</div></div>
+      <div class="studio-block"><div class="studio-block-head"><strong>Champs</strong><span class="field-hint">${(studioFace()?.fields||[]).length} bloc(s)</span></div>
+        <div class="studio-field-list">${(studioFace()?.fields||[]).map((field,index)=>`<button type="button" class="studio-field-chip ${index===studio.selected?'active':''}" data-action="studio-pick" data-index="${index}">${esc(BADGE_FIELD_LABELS[field.key]||field.key)}</button>`).join('')||'<span class="field-hint">Aucun champ sur cette face.</span>'}</div>
+        <div class="studio-add-row">${['name','company','category','event','code','qr','text'].map(key=>`<button type="button" class="btn btn-soft btn-sm" data-action="studio-add" data-key="${key}">+ ${esc(BADGE_FIELD_LABELS[key])}</button>`).join('')}</div>
+      </div>
+      <div class="studio-block" id="studioProps"></div>
+      <div class="studio-block"><div class="studio-block-head"><strong>QR code</strong><span class="field-hint">Généré hors ligne</span></div>
+        <div class="field"><label for="studioQrMode">Contenu du QR</label><select id="studioQrMode"><option value="code" ${(model?.qrMode||'code')==='code'?'selected':''}>Référence du badge (IE-0101)</option><option value="url" ${model?.qrMode==='url'?'selected':''}>Lien vers le site</option></select></div>
+        <div class="field" id="studioQrPrefixWrap" ${model?.qrMode==='url'?'':'hidden'}><label for="studioQrPrefix">Adresse du lien</label><input id="studioQrPrefix" maxlength="300" value="${esc(model?.qrPrefix||'')}" placeholder="${esc((location.origin||'')+'/p/')}"><div class="field-hint">Le code du badge est ajouté à la fin du lien. Laissez vide pour utiliser ce site (…/p/CODE).</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="studio-reset">Rétablir le modèle de test</button><div style="display:flex;gap:8px"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-primary" type="button" data-action="studio-save">${icon('check')}Enregistrer les modèles</button></div></div></div>`;
+}
+function renderStudio(){
+  const model=studioTemplate();
+  if(!model)return;
+  renderStudioPreviewOnly();
+  renderStudioProps();
+  const nameInput=$('#studioModelName');if(nameInput)nameInput.value=model.name||'';
+  const fmtW=$('#studioFmtW');if(fmtW)fmtW.value=Number(model.format?.width||90);
+  const fmtH=$('#studioFmtH');if(fmtH)fmtH.value=Number(model.format?.height||60);
+  const isDefault=$('#studioIsDefault');if(isDefault)isDefault.checked=!!model.isDefault;
+  const qrMode=$('#studioQrMode');if(qrMode)qrMode.value=model.qrMode||'code';
+  const qrPrefix=$('#studioQrPrefix');if(qrPrefix)qrPrefix.value=model.qrPrefix||'';
+  $('#studioQrPrefixWrap')?.toggleAttribute('hidden',(model.qrMode||'code')!=='url');
+  const imageName=$('#studioImageName');
+  if(imageName)imageName.textContent=studioFace()?.image?'Visuel importé pour cette face.':'Aucun visuel : fond blanc, les champs restent imprimés.';
+  const select=$('#studioModelSelect');if(select)select.value=String(studio.index);
+  $$('.studio-tab').forEach(tab=>tab.classList.toggle('active',tab.dataset.side===studio.side));
+  $$('.studio-field-chip').forEach(chip=>chip.classList.toggle('active',Number(chip.dataset.index)===studio.selected));
+}
+function renderStudioPreviewOnly(){
+  const model=studioTemplate();
+  const face=studioFace();
+  const canvas=$('#studioCanvas');
+  if(!canvas||!model||!face)return;
+  const sample=getPeople()[0]||BADGE_SAMPLE_PERSON;
+  const width=Number(model.format?.width||90)||90;
+  const height=Number(model.format?.height||60)||60;
+  canvas.innerHTML=`<div class="bd-frame bd-frame-studio" style="aspect-ratio:${width}/${height}">${renderBadgeMarkup(sample,model,studio.side,{preview:true,extraClass:'bd-studio'})}</div>`;
+  (canvas.querySelectorAll('[data-field]')||[]).forEach((node,index)=>{
+    node.dataset.index=String(index);
+    node.addEventListener('pointerdown',event=>studioDragStart(event,index));
+    if(index===studio.selected)node.classList.add('selected');
+  });
+}
+function renderStudioProps(){
+  const box=$('#studioProps');
+  if(!box)return;
+  const face=studioFace();
+  const field=face?.fields?.[studio.selected];
+  if(!field){box.innerHTML='<div class="studio-block-head"><strong>Réglages du champ</strong></div><div class="field-hint">Sélectionnez un bloc sur l’aperçu, ou ajoutez-en un.</div>';return;}
+  const height=Number(studioTemplate()?.format?.height||60);
+  box.innerHTML=`<div class="studio-block-head"><strong>Réglages : ${esc(BADGE_FIELD_LABELS[field.key]||field.key)}</strong><button class="link-button" type="button" data-action="studio-remove">Retirer ce champ</button></div>
+    ${field.key==='text'?`<div class="field"><label for="propText">Texte affiché</label><input id="propText" maxlength="120" value="${esc(field.text||'')}"></div>`:''}
+    <div class="studio-row2"><div class="field"><label for="propSize">Taille (${Math.round(Number(field.size||8)*height/100*10)/10} mm)</label><input id="propSize" type="number" min="1" max="60" step="0.5" value="${Number(field.size||8)}"></div><div class="field"><label for="propWidth">Largeur du bloc (%)</label><input id="propWidth" type="number" min="2" max="100" step="1" value="${Number(field.w||20)}"></div></div>
+    <div class="studio-row2"><div class="field"><label for="propWeight">Graisse</label><select id="propWeight">${[300,400,500,600,700,800,900].map(weight=>`<option value="${weight}" ${Number(field.weight||600)===weight?'selected':''}>${weight}</option>`).join('')}</select></div><div class="field"><label for="propAlign">Alignement</label><select id="propAlign">${['left','center','right'].map(align=>`<option value="${align}" ${(field.align||'left')===align?'selected':''}>${align==='left'?'Gauche':align==='center'?'Centré':'Droite'}</option>`).join('')}</select></div></div>
+    <div class="studio-row2"><div class="field"><label for="propColor">Couleur</label><input id="propColor" type="color" value="${esc(/^#[0-9a-fA-F]{6}$/.test(field.color||'')?field.color:'#0B1D3A')}"></div><div class="field"><label for="propUpper">Majuscules</label><select id="propUpper"><option value="0" ${!field.uppercase?'selected':''}>Non</option><option value="1" ${field.uppercase?'selected':''}>Oui</option></select></div></div>
+    <div class="field-hint">Position : ${Number(field.x||0).toFixed(1)} % · ${Number(field.y||0).toFixed(1)} %</div>`;
+}
+function bindStudioEvents(){
+  const root=$('#studioRoot');
+  if(!root)return;
+  root.addEventListener('input',event=>{
+    const id=event.target.id;
+    const model=studioTemplate();
+    const face=studioFace();
+    const field=face?.fields?.[studio.selected];
+    if(id==='studioModelName'&&model)model.name=event.target.value;
+    if(id==='studioFmtW'&&model){model.format={...(model.format||{}),width:Math.max(30,Math.min(300,Number(event.target.value)||90))};renderStudio();}
+    if(id==='studioFmtH'&&model){model.format={...(model.format||{}),height:Math.max(30,Math.min(300,Number(event.target.value)||60))};renderStudio();}
+    if(id==='studioQrMode'&&model){model.qrMode=event.target.value;renderStudio();}
+    if(id==='studioQrPrefix'&&model)model.qrPrefix=event.target.value;
+    if(id==='studioIsDefault'&&model){model.isDefault=!!event.target.checked;}
+    if(field){
+      if(id==='propText'){field.text=event.target.value;renderStudioPreviewOnly();}
+      if(id==='propSize'){field.size=Math.max(1,Math.min(60,Number(event.target.value)||8));renderStudioPreviewOnly();}
+      if(id==='propWidth'){field.w=Math.max(2,Math.min(100,Number(event.target.value)||20));renderStudioPreviewOnly();}
+      if(id==='propWeight'){field.weight=Number(event.target.value)||600;renderStudioPreviewOnly();}
+      if(id==='propAlign'){field.align=event.target.value;renderStudioPreviewOnly();}
+      if(id==='propColor'){field.color=event.target.value;renderStudioPreviewOnly();}
+      if(id==='propUpper'){field.uppercase=event.target.value==='1'?1:0;renderStudioPreviewOnly();}
+    }
+  });
+  root.addEventListener('change',async event=>{
+    if(event.target.id==='studioModelSelect'){studio.index=Number(event.target.value)||0;studio.selected=0;renderStudio();}
+    if(event.target.id==='studioIsDefault'){
+      const current=studioTemplate();
+      if(current){studio.templates.forEach(item=>{item.isDefault=item===current;});}
+    }
+    if(event.target.id==='studioImageInput'){
+      const file=event.target.files?.[0];
+      event.target.value='';
+      if(file)await studioImportImage(file);
+    }
+  });
+}
+function studioDragStart(event,index){
+  const model=studioTemplate();
+  const face=studioFace();
+  if(!model||!face||!face.fields[index])return;
+  const badge=event.currentTarget.closest('.bd');
+  if(!badge)return;
+  studio.selected=index;
+  renderStudioPreviewOnly();
+  renderStudioProps();
+  $$('.studio-field-chip').forEach(chip=>chip.classList.toggle('active',Number(chip.dataset.index)===index));
+  const rect=badge.getBoundingClientRect();
+  studio.drag={index,rect,startX:event.clientX,startY:event.clientY,originX:Number(face.fields[index].x||0),originY:Number(face.fields[index].y||0)};
+  event.preventDefault();
+  document.addEventListener('pointermove',studioDragMove);
+  document.addEventListener('pointerup',studioDragEnd,{once:true});
+}
+function studioDragMove(event){
+  if(!studio?.drag)return;
+  const face=studioFace();
+  const field=face?.fields?.[studio.drag.index];
+  if(!field)return;
+  const {rect,startX,startY,originX,originY}=studio.drag;
+  const dx=(event.clientX-startX)/Math.max(rect.width,1)*100;
+  const dy=(event.clientY-startY)/Math.max(rect.height,1)*100;
+  field.x=Math.max(0,Math.min(100-Number(field.w||20),Math.round((originX+dx)*10)/10));
+  field.y=Math.max(0,Math.min(100,Math.round((originY+dy)*10)/10));
+  const node=$(`#studioCanvas [data-field][data-index="${studio.drag.index}"]`);
+  if(node){node.style.left=`${field.x}%`;node.style.top=`${field.y}%`;}
+}
+function studioDragEnd(){
+  document.removeEventListener('pointermove',studioDragMove);
+  if(studio?.drag){studio.drag=null;renderStudioProps();}
+}
+function studioAddField(key){
+  const face=studioFace();
+  if(!face)return;
+  if(face.fields.length>=40){showToast('40 blocs maximum par face.');return;}
+  const base={key:'text',x:8,y:40,w:60,size:7,weight:600,color:'#0B1D3A',align:'left',uppercase:0,text:''};
+  const presets={
+    name:{key:'name',x:6,y:32,w:88,size:13,weight:800},
+    company:{key:'company',x:6,y:52,w:62,size:6.2,weight:600,color:'#3F4F68'},
+    category:{key:'category',x:6,y:63,w:45,size:4.6,weight:700,uppercase:1},
+    event:{key:'event',x:6,y:88,w:62,size:4.6,weight:700,color:'#5E6F87',uppercase:1},
+    code:{key:'code',x:6,y:74,w:40,size:5.5,weight:800},
+    qr:{key:'qr',x:71,y:53,w:24,size:20,weight:600,align:'center'},
+    text:{key:'text',x:8,y:70,w:55,size:7,weight:600,text:'Texte libre',uppercase:0}
+  };
+  face.fields.push({...base,...(presets[key]||{})});
+  studio.selected=face.fields.length-1;
+  renderStudio();
+  $$('.studio-field-chip').forEach(chip=>chip.classList.toggle('active',Number(chip.dataset.index)===studio.selected));
+}
+function studioRemoveField(){
+  const face=studioFace();
+  if(!face||!face.fields.length)return;
+  face.fields.splice(studio.selected,1);
+  studio.selected=Math.max(0,Math.min(studio.selected,face.fields.length-1));
+  renderStudio();
+}
+function studioNew(){
+  if(!studio)return;
+  if(studio.templates.length>=12){showToast('12 modèles maximum par congrès.');return;}
+  const source=studioTemplate();
+  const model=defaultBadgeTemplate();
+  model.name=`Modèle ${studio.templates.length+1}`;
+  model.format={...(source?.format||model.format)};
+  model.isDefault=false;
+  studio.templates.push(model);
+  studio.index=studio.templates.length-1;
+  studio.selected=0;
+  studioShellRender();
+}
+function studioDuplicate(){
+  if(!studio)return;
+  if(studio.templates.length>=12){showToast('12 modèles maximum par congrès.');return;}
+  const copy=JSON.parse(JSON.stringify(studioTemplate()));
+  copy.name=`${String(copy.name||'Modèle').slice(0,70)} (copie)`;
+  copy.isDefault=false;
+  studio.templates.splice(studio.index+1,0,copy);
+  studio.index+=1;
+  studio.selected=0;
+  studioShellRender();
+}
+function studioDelete(){
+  if(!studio)return;
+  if(studio.templates.length<2){showToast('Gardez au moins un modèle.');return;}
+  studio.templates.splice(studio.index,1);
+  studio.index=Math.max(0,studio.index-1);
+  studio.selected=0;
+  studioShellRender();
+}
+function studioReset(){
+  if(!studio)return;
+  const current=studioTemplate();
+  if(!current)return;
+  const fresh=defaultBadgeTemplate();
+  fresh.name='Modèle de test';
+  fresh.isDefault=!!current.isDefault||studio.templates.length===1;
+  studio.templates[studio.index]=fresh;
+  studio.selected=0;
+  studio.side='front';
+  studioShellRender();
+  showToast('Modèle de test rétabli. Enregistrez pour appliquer.');
+}
+async function studioImportImage(file){
+  if(!file)return;
+  if(file.size>8*1024*1024){showToast('Image trop lourde : 8 Mo maximum avant compression.');return;}
+  try{
+    const dataUrl=await shrinkImageFile(file,1600,0.82);
+    if(String(dataUrl).length>2300000){showToast('Image encore trop lourde après compression. Utilisez un visuel plus simple (JPEG).');return;}
+    const face=studioFace();
+    if(!face)return;
+    face.image=dataUrl;
+    renderStudio();
+    showToast('Visuel importé. Placez maintenant les champs sur l’image.');
+  }catch(error){showToast(error.message||'Import de l’image impossible.');}
+}
+function studioClearImage(){
+  const face=studioFace();
+  if(!face)return;
+  face.image='';
+  renderStudio();
+}
+function shrinkImageFile(file,maxSide=1600,quality=0.82){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('Lecture du fichier impossible.'));
+    reader.onload=()=>{
+      const raw=String(reader.result||'');
+      if(!/^data:image\//.test(raw)){reject(new Error('Ce fichier n’est pas une image.'));return;}
+      if(/^data:image\/svg\+xml/.test(raw)){resolve(raw);return;}
+      const image=new Image();
+      image.onerror=()=>resolve(raw);
+      image.onload=()=>{
+        try{
+          const scale=Math.min(1,maxSide/Math.max(image.width||1,image.height||1));
+          const width=Math.max(1,Math.round((image.width||1)*scale));
+          const height=Math.max(1,Math.round((image.height||1)*scale));
+          const canvas=document.createElement('canvas');
+          canvas.width=width;canvas.height=height;
+          const context=canvas.getContext('2d');
+          if(!context){resolve(raw);return;}
+          context.drawImage(image,0,0,width,height);
+          const png=/^data:image\/png/.test(raw);
+          resolve(canvas.toDataURL(png?'image/png':'image/jpeg',quality));
+        }catch(error){resolve(raw);}
+      };
+      image.src=raw;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+async function saveBadgeStudio(){
+  const event=getEvent();
+  if(!event||!studio)return false;
+  if(!studio.templates.some(template=>template.isDefault))studio.templates[0].isDefault=true;
+  try{
+    const data=await persistBadgeTemplates(event.id,studio.templates);
+    studio=null;
+    closeModal();
+    render();
+    showToast(`Modèles de badge enregistrés : ${(data.templates||[]).length}.`);
+    return true;
+  }catch(error){showToast(error.message||'Enregistrement des modèles impossible.');return false;}
+}
+
+/* ── Impression : un badge par page ou planche A4 réutilisable ─────── */
+let printStartCell=0;
+let printState={list:[],label:''};
+function computeSheetCells(config,model){
+  const badgeW=Number(model?.format?.width||90);
+  const badgeH=Number(model?.format?.height||60);
+  const sheet=config.sheet||{};
+  const usableW=A4.width-Number(sheet.marginLeft||0)-Number(sheet.marginRight||0);
+  const usableH=A4.height-Number(sheet.marginTop||0)-Number(sheet.marginBottom||0);
+  const stepX=badgeW+Math.max(0,Number(sheet.gapX||0));
+  const stepY=badgeH+Math.max(0,Number(sheet.gapY||0));
+  const cols=Math.max(1,Math.floor((usableW+0.01)/stepX));
+  const rows=Math.max(1,Math.floor((usableH+0.01)/stepY));
+  const positions=[];
+  for(let row=0;row<rows;row+=1){
+    for(let col=0;col<cols;col+=1){
+      positions.push({
+        x:Number(sheet.marginLeft||0)+col*stepX+Number(sheet.offsetX||0),
+        y:Number(sheet.marginTop||0)+row*stepY+Number(sheet.offsetY||0),
+        row,col
+      });
+    }
+  }
+  return {badgeW,badgeH,cols,rows,perPage:positions.length,positions};
+}
+function openPrintModal(list,label='badges'){
+  const event=getEvent();
+  if(!event){showToast('Sélectionnez un congrès avant d’imprimer des badges.');return;}
+  const people=(Array.isArray(list)?list:[]).filter(Boolean);
+  if(!people.length){showToast('Aucun inscrit à imprimer.');return;}
+  const templates=badgeTemplatesForEvent(event.id);
+  const model=activeBadgeTemplate(event.id);
+  printStartCell=0;
+  printState={list:people,label};
+  openModal(`<div class="modal-head"><div><h2>Imprimer les badges</h2><p>${people.length} ${people.length>1?'inscrits':'inscrit'} · ${esc(label)} · ${esc(event.name)}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <form id="printForm"><div class="modal-body">
+    <div class="print-grid">
+      <div class="field"><label for="printTemplate">Modèle</label><select id="printTemplate">${templates.map(template=>`<option value="${esc(template.id)}" ${template.isDefault?'selected':''}>${esc(template.name)}${template.isDefault?' (par défaut)':''}</option>`).join('')}</select></div>
+      <div class="field"><label for="printCopies">Exemplaires par personne</label><input id="printCopies" type="number" min="1" max="6" step="1" value="1"></div>
+      <div class="field"><label for="printLayout">Disposition</label><select id="printLayout"><option value="sheet">Planche A4 (plusieurs badges)</option><option value="page">Un badge par page</option></select></div>
+      <div class="field"><label for="printDuplex">Recto-verso</label><select id="printDuplex"><option value="no">Recto seulement</option><option value="yes" ${badgeHasBack(model)?'':'disabled'}>Recto puis verso${badgeHasBack(model)?'':' (aucun verso défini)'}</option></select></div>
+    </div>
+    <div id="printSheetOptions" class="print-sheet-options">
+      <div class="print-grid four">
+        <div class="field"><label for="printMarginTop">Marge haut (mm)</label><input id="printMarginTop" type="number" min="0" max="60" step="1" value="10"></div>
+        <div class="field"><label for="printMarginLeft">Marge gauche (mm)</label><input id="printMarginLeft" type="number" min="0" max="60" step="1" value="10"></div>
+        <div class="field"><label for="printMarginRight">Marge droite (mm)</label><input id="printMarginRight" type="number" min="0" max="60" step="1" value="10"></div>
+        <div class="field"><label for="printMarginBottom">Marge bas (mm)</label><input id="printMarginBottom" type="number" min="0" max="60" step="1" value="10"></div>
+        <div class="field"><label for="printGapX">Écart horizontal (mm)</label><input id="printGapX" type="number" min="0" max="30" step="1" value="3"></div>
+        <div class="field"><label for="printGapY">Écart vertical (mm)</label><input id="printGapY" type="number" min="0" max="30" step="1" value="3"></div>
+        <div class="field"><label for="printOffsetX">Décalage fin X (mm)</label><input id="printOffsetX" type="number" min="-20" max="20" step="0.5" value="0"></div>
+        <div class="field"><label for="printOffsetY">Décalage fin Y (mm)</label><input id="printOffsetY" type="number" min="-20" max="20" step="0.5" value="0"></div>
+      </div>
+      <div class="field"><label>Première case libre</label><div id="printSheetPicker" class="sheet-picker"></div><div class="field-hint">Feuille déjà entamée : cliquez sur la première case encore libre. L’impression démarre là et laisse le papier déjà imprimé intact.</div></div>
+      <label class="print-check"><input id="printCut" type="checkbox"> Ajouter des repères de coupe aux angles</label>
+    </div>
+    <div class="notice" style="margin-top:12px">${icon('info')}<span id="printSummary">—</span></div>
+    <div class="notice warning" style="margin-top:8px">${icon('info')}<span>Dans la fenêtre d’impression : marges « Aucune », échelle <strong>100 %</strong>, et « Graphiques d’arrière-plan » activé si votre visuel est un fond de couleur. Les images importées s’impriment dans tous les cas.</span></div>
+  </div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-primary" type="submit">${icon('printer')}Imprimer</button></div></form>`,true);
+  const form=$('#printForm');
+  form?.addEventListener('input',()=>updatePrintSummary());
+  form?.addEventListener('change',event=>{if(['printLayout','printTemplate','printDuplex','printCut'].includes(event.target.id))updatePrintSummary();});
+  updatePrintSummary();
+}
+function printConfig(){
+  const model=badgeTemplateById($('#printTemplate')?.value)||activeBadgeTemplate();
+  const num=(selector,fallback)=>{const value=Number($(selector)?.value);return Number.isFinite(value)?value:fallback;};
+  return {
+    template:model,
+    copies:Math.max(1,Math.min(6,Math.round(num('#printCopies',1)))),
+    layout:$('#printLayout')?.value==='page'?'page':'sheet',
+    duplex:$('#printDuplex')?.value==='yes'&&badgeHasBack(model),
+    cut:!!$('#printCut')?.checked,
+    sheet:{
+      marginTop:num('#printMarginTop',10),marginLeft:num('#printMarginLeft',10),
+      marginRight:num('#printMarginRight',10),marginBottom:num('#printMarginBottom',10),
+      gapX:num('#printGapX',3),gapY:num('#printGapY',3),
+      offsetX:num('#printOffsetX',0),offsetY:num('#printOffsetY',0),
+      start:printStartCell
+    }
+  };
+}
+function updatePrintSummary(){
+  const config=printConfig();
+  const total=(printState.list||[]).length*config.copies;
+  const summary=$('#printSummary');
+  const picker=$('#printSheetPicker');
+  const sheetOptions=$('#printSheetOptions');
+  const sheetMode=config.layout==='sheet';
+  sheetOptions?.classList.toggle('is-off',!sheetMode);
+  let cells=null;
+  if(picker){
+    cells=computeSheetCells(config,config.template);
+    if(printStartCell>=cells.perPage)printStartCell=0;
+    picker.innerHTML=`<div class="sheet-picker-grid" style="grid-template-columns:repeat(${cells.cols},minmax(0,1fr))">${cells.positions.map((position,index)=>`<button type="button" class="sheet-cell ${index<printStartCell?'used':''} ${index===printStartCell?'start':''}" data-action="print-cell" data-index="${index}" title="Case ${index+1}">${index+1}</button>`).join('')}</div>`;
+  }
+  if(!summary)return;
+  if(!sheetMode){
+    const pages=total*(config.duplex?2:1);
+    summary.textContent=`${total} badge(s) · 1 badge par page au format ${Number(config.template?.format?.width||90)} × ${Number(config.template?.format?.height||60)} mm · ${pages} page(s)${config.duplex?' (recto puis verso)':''}.`;
+    return;
+  }
+  cells=cells||computeSheetCells(config,config.template);
+  const free=Math.max(0,cells.perPage-printStartCell);
+  const pages=total?1+Math.ceil(Math.max(0,total-free)/cells.perPage):0;
+  summary.textContent=`${cells.perPage} badge(s) par feuille A4 (${cells.cols} × ${cells.rows}) · ${total} badge(s) · environ ${pages} feuille(s)${config.duplex?' · recto + verso':''}${printStartCell?` · départ à la case ${printStartCell+1}`:''}.`;
+}
+function printBadges(list,config){
+  const model=config.template||activeBadgeTemplate();
+  const width=Number(model?.format?.width||90);
+  const height=Number(model?.format?.height||60);
+  const people=[];
+  (list||[]).forEach(person=>{for(let copy=0;copy<config.copies;copy+=1)people.push(person);});
+  if(!people.length)return;
+  const pages=[];
+  if(config.layout==='page'){
+    people.forEach(person=>{
+      pages.push(`<div class="print-page">${renderBadgeMarkup(person,model,'front',{extraClass:'bd-print'})}</div>`);
+      if(config.duplex)pages.push(`<div class="print-page">${renderBadgeMarkup(person,model,'back',{extraClass:'bd-print',mirror:true})}</div>`);
+    });
+    executePrint(pages.join(''),`${width}mm ${height}mm`,`${width}mm`,`${height}mm`);
+    return;
+  }
+  const cells=computeSheetCells(config,model);
+  const sheetPages=new Map();
+  let slot=Number(config.sheet?.start||0);
+  people.forEach(person=>{
+    const pageNumber=Math.floor(slot/cells.perPage);
+    if(!sheetPages.has(pageNumber))sheetPages.set(pageNumber,[]);
+    sheetPages.get(pageNumber).push({person,position:cells.positions[slot%cells.perPage]});
+    slot+=1;
+  });
+  Array.from(sheetPages.keys()).sort((a,b)=>a-b).forEach(pageNumber=>{
+    const entries=sheetPages.get(pageNumber);
+    pages.push(renderSheetPage(entries,model,config,false,cells));
+    if(config.duplex)pages.push(renderSheetPage(entries,model,config,true,cells));
+  });
+  executePrint(pages.join(''),'A4 portrait','210mm','297mm');
+}
+function renderSheetPage(entries,model,config,mirror,cells){
+  const badges=entries.map(({person,position})=>{
+    const left=mirror?Math.max(0,A4.width-position.x-cells.badgeW):position.x;
+    const style=`left:${left.toFixed(2)}mm;top:${position.y.toFixed(2)}mm`;
+    const cut=config.cut?'<span class="bd-cut tl"></span><span class="bd-cut tr"></span><span class="bd-cut bl"></span><span class="bd-cut br"></span>':'';
+    return `<div class="print-badge" style="${style}">${renderBadgeMarkup(person,model,mirror?'back':'front',{mirror,extraClass:'bd-print'})}${cut}</div>`;
+  }).join('');
+  return `<div class="print-page print-sheet">${badges}</div>`;
+}
+function executePrint(html,pageSize,pageWidth,pageHeight){
+  const area=$('#printArea');
+  if(!area){window.print();return;}
+  area.innerHTML=html;
+  let style=document.getElementById('printPageStyle');
+  if(!style){style=document.createElement('style');style.id='printPageStyle';document.head.appendChild(style);}
+  style.textContent=`@page{size:${pageSize};margin:0}html{--print-w:${pageWidth};--print-h:${pageHeight}}`;
+  setTimeout(()=>window.print(),180);
+}
+window.addEventListener('afterprint',()=>{
+  const area=$('#printArea');
+  if(area)area.innerHTML='';
+  document.getElementById('printPageStyle')?.remove();
+});
+function filteredBadgePeople(){
+  return getPeople().filter(person=>!badgeQuery||[person.name,person.company,person.code,displayCategory(person.category)].join(' ').toLocaleLowerCase('fr').includes(norm(badgeQuery)));
+}
+let badgeQueryHandled=false;
+async function focusBadgeFromQuery(){
+  if(badgeQueryHandled)return;
+  let code='';
+  try{code=new URLSearchParams(location.search).get('badge')||'';}catch(e){return;}
+  if(!code)return;
+  badgeQueryHandled=true;
+  try{history.replaceState(null,'',location.pathname);}catch(e){}
+  const target=getPeople().find(person=>norm(person.code)===norm(code));
+  if(!target){showToast(`Aucun inscrit ne porte la référence ${code}.`);return;}
+  currentPage='people';
+  render();
+  openDetails(target.id);
+}
+function printBadge(id){
+  const person=findPerson(id);
+  if(!person){showToast('Inscrit introuvable.');return;}
+  openPrintModal([person],'un badge');
+}
+
 // Navigation et actions de l’interface.
 document.addEventListener('click',async event=>{
   const page=event.target.closest('[data-page]');if(page){event.preventDefault();setPage(page.dataset.page);return;}
@@ -597,7 +1254,20 @@ document.addEventListener('click',async event=>{
   else if(action==='template-xlsx')downloadExcelTemplate();
   else if(action==='export')exportCSV();
   else if(action==='go-people')setPage('people');
-  else if(action==='open-event'){store.activeEventId=id;peopleQuery='';peopleFilter='all';badgeQuery='';currentPage='home';saveStore();render();await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id)]);await syncQueue(id);}
+  else if(action==='open-event'){store.activeEventId=id;peopleQuery='';peopleFilter='all';badgeQuery='';currentPage='home';saveStore();render();await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id)]);await syncQueue(id);}
+  else if(action==='badge-studio'){openBadgeStudio();return;}
+  else if(action==='studio-side'){if(studio){studio.side=button.dataset.side==='back'?'back':'front';studio.selected=0;renderStudio();}return;}
+  else if(action==='studio-pick'){if(studio){studio.selected=Number(button.dataset.index)||0;renderStudio();}return;}
+  else if(action==='studio-add'){studioAddField(button.dataset.key||'text');return;}
+  else if(action==='studio-remove'){studioRemoveField();return;}
+  else if(action==='studio-new'){studioNew();return;}
+  else if(action==='studio-duplicate'){studioDuplicate();return;}
+  else if(action==='studio-delete'){studioDelete();return;}
+  else if(action==='studio-reset'){studioReset();return;}
+  else if(action==='studio-save'){await saveBadgeStudio();return;}
+  else if(action==='studio-image-clear'){studioClearImage();return;}
+  else if(action==='print-all'){openPrintModal(filteredBadgePeople(),'tous les badges');return;}
+  else if(action==='print-cell'){printStartCell=Number(button.dataset.index)||0;updatePrintSummary();return;}
   else if(action==='details')openDetails(id);
   else if(action==='badge')openBadgeModal(id);
   else if(action==='print-badge')printBadge(id);
@@ -612,7 +1282,8 @@ document.addEventListener('click',async event=>{
 document.addEventListener('change',async event=>{
   if(event.target.id==='paymentStatus'){const paid=event.target.value==='paid';['paymentAmount','paymentMethod','paymentReference'].forEach(id=>{const field=$('#'+id);if(field)field.disabled=!paid;});}
   if(event.target.matches('[data-user-role]')){const id=event.target.dataset.id,role=event.target.value;try{await api(`/api/users/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({role})});showToast('Rôle mis à jour; ce compte devra se reconnecter.');await openAccountsModal();}catch(error){showToast(error.message||'Modification impossible.');await openAccountsModal();}return;}
-  if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';saveStore();render();if(id){await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id)]);await syncQueue(id);}}
+  if(event.target.id==='badgeModelSelect'){await setDefaultBadgeTemplate(event.target.value);return;}
+  if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';saveStore();render();if(id){await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id)]);await syncQueue(id);}}
   if(event.target.id==='csvFile'){const file=event.target.files?.[0];if(file)await importFile(file);event.target.value='';}
   if(event.target.closest?.('#priceRows')){updatePriceSummary();}
   if(event.target.id==='restoreBackupFileInput'){const file=event.target.files?.[0];const label=$('#restoreBackupFileName');if(label)label.textContent=file?`Fichier choisi : ${file.name} (${(file.size/1024).toFixed(0)} Ko)`:'Choisissez le fichier .zip téléchargé par « Exporter la sauvegarde ».';}
@@ -627,6 +1298,7 @@ document.addEventListener('keydown',event=>{
 });
 document.addEventListener('submit',async event=>{
   const form=event.target;
+  if(form.id==='printForm'){event.preventDefault();const config=printConfig();const list=printState.list||[];closeModal();printBadges(list,config);return;}
   if(form.id==='setupForm'){
     event.preventDefault();const fd=new FormData(form),username=String(fd.get('username')||'').trim(),password=String(fd.get('password')||''),confirm=String(fd.get('passwordConfirm')||''),setupToken=String(fd.get('setupToken')||'');
     if(password!==confirm){renderAuthScreen('setup','Les deux mots de passe ne correspondent pas.');return;}
