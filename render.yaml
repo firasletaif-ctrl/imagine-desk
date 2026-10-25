@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: imagine-events-desk
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: IMAGINE_DB_PATH
+        value: /tmp/imagine_desk.sqlite3
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: IMAGINE_SETUP_TOKEN
+        sync: false
