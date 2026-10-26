@@ -295,6 +295,26 @@ Render accepte des dépôts Git connectés et des images Docker préconstruites.
 
 `alwaysdata_wsgi.py` expose les routes existantes sous forme WSGI, sans lancer de serveur TCP. Guide de configuration : `ALWAYSDATA-DEMO.md`. L’offre gratuite Alwaysdata est annoncée pour un usage personnel et exclut les objectifs commerciaux; vérifier les conditions avant de l’utiliser pour Imagine Events. La démo doit rester avec des données fictives. Le fichier SQLite doit rester dans un dossier privé persistant du compte, jamais dans Git.
 
+## Dépannage : page blanche ou écran vide
+
+Si l’application reste vide après la connexion, c’est presque toujours un fichier
+`app.js`/`styles.css` resté dans le cache du navigateur ou du service worker après
+une mise à jour.
+
+1. Ouvrez l’adresse du site suivie de **`?reset=1`** (par exemple
+   `http://192.168.1.20:8000/?reset=1`) : le cache hors ligne et le service worker
+   sont vidés, puis la page se recharge. Les données locales et les actions en
+   attente de synchronisation sont conservées.
+2. Sinon, forcez le rechargement : `Ctrl+Maj+R` (`Cmd+Maj+R` sur Mac), ou fenêtre de
+   navigation privée.
+3. Vérifiez la version chargée dans la console du navigateur (F12) :
+   `window.__imagineBuild` doit indiquer la version courante.
+
+Depuis la version en cours, une erreur d’affichage n’efface plus l’écran : un panneau
+« L’affichage a rencontré une erreur » affiche le message exact et un bouton
+**Recharger la page**, avec le numéro de version. Transmettez ce message en cas de
+problème persistant.
+
 ## À sécuriser avant un congrès réel
 
 C’est un **prototype/MVP**, pas une garantie de disponibilité permanente. Les comptes sont présents, mais le dépôt ne fournit pas encore de sauvegardes distantes automatiques, de bascule haute disponibilité ni de procédure de reprise éprouvée. Avant d’importer de vraies données : héberger derrière HTTPS, sauvegarder la base, sécuriser les appareils partagés et tester le réseau ainsi que les imprimantes sur place. L’aperçu de démonstration n’est pas un hébergement permanent de production.

@@ -1,6 +1,9 @@
 'use strict';
 
 const STORAGE_KEY = 'imagine-events-desk-platform-v1';
+// Marqueur de version : visible dans la console (window.__imagineBuild) pour
+// vérifier qu'un navigateur n'exécute pas un ancien fichier mis en cache.
+const APP_BUILD = '2026-10-26 · corbeille-congres';
 const categoryNames = { participant:'Participant', vip:'VIP', speaker:'Intervenant', press:'Presse', team:'Équipe' };
 const defaultStore = { events:[], trashEvents:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, trashCountByEvent:{}, trashByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
 function loadStore(){
@@ -107,7 +110,7 @@ async function api(path,options={}){
   let response;
   try{response=await fetch(path,{...options,headers,cache:'no-store',credentials:'same-origin'});}catch(error){apiOnline=false;updateStatus();throw new Error('Serveur injoignable. Les actions de check-in restent enregistrées sur cet appareil.');}
   let data={};try{data=await response.json();}catch(e){}
-  if(response.status===401&&!String(path).startsWith('/api/auth/')){apiOnline=false;authUser=null;store.cachedUser=null;store.authCachedAt=0;saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}showAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
+  if(response.status===401&&!String(path).startsWith('/api/auth/')){apiOnline=false;authUser=null;store.cachedUser=null;store.authCachedAt=0;saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
   if(!response.ok){const error=new Error(data.error||`Erreur serveur (${response.status}).`);error.status=response.status;throw error;}
   apiOnline=true;updateStatus();return data;
 }
@@ -153,7 +156,21 @@ function renderHead(){
   $('#pageHead').innerHTML=`<div><div class="eyebrow">${esc(info.eyebrow)}</div><h1>${esc(info.title)}</h1><p>${esc(info.description)}</p></div><div class="heading-actions">${headAction()}</div>`;
 }
 function noticeHTML(kind,text,button='') {return `<div class="notice ${kind||''}">${icon(kind==='warning'?'info':'cloud')}<span>${text}</span>${button}</div>`;}
+function showFatalError(error){
+  const box=document.getElementById('appContent');
+  const message=String((error&&(error.message||error))||'Erreur inconnue');
+  console.error('Imagine Events Desk — rendu impossible', error);
+  if(!box)return;
+  box.innerHTML=`<section class="card" style="border-color:#F3D9DE;background:#FFF7F8"><div class="card-head"><div><h2 class="card-title">L’affichage a rencontré une erreur</h2><p class="card-subtitle">Vos données ne sont pas perdues. Rechargez la page ; si le problème persiste, transmettez le message ci-dessous.</p></div></div><div style="padding:0 23px 22px"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;background:#fff;border:1px solid #F3D9DE;border-radius:10px;padding:12px;font-size:12.5px;color:#8A1B2E">${esc(message)}</pre><div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" type="button" data-action="reload-app">Recharger la page</button></div><p class="field-hint" style="margin-top:10px">Version : ${esc(APP_BUILD)}</p></div></section>`;
+}
 function render(){
+  try{
+    renderWorkspace();
+  }catch(error){
+    showFatalError(error);
+  }
+}
+function renderWorkspace(){
   const active=document.activeElement;const focusId=active&&active.id?active.id:'';let selectionStart=null;try{selectionStart=active?.selectionStart;}catch(e){}
   chooseActiveEvent();updateRoleControls();renderStaticIcons();renderEventSelect();
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===currentPage));
@@ -264,16 +281,47 @@ function renderAuthScreen(mode='login',message=''){
 async function enterWorkspace(user,offline=false){
   authUser=user;if(!offline){store.cachedUser=user;store.authCachedAt=Date.now();}else if(!store.cachedUser){store.cachedUser=user;}saveStore();$('#authRoot').hidden=true;$('#authRoot').innerHTML='';$('#appRoot').hidden=false;
   if(!offline)apiOnline=true;else apiOnline=false;
-  render();
+  try{render();}catch(error){showFatalError(error);}
   if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-  if(navigator.onLine){await refreshEvents(true);chooseActiveEvent();if(store.activeEventId){await Promise.all([refreshParticipants(store.activeEventId,!store.cursorByEvent[store.activeEventId]),loadPrices(store.activeEventId),loadBadgeTemplates(store.activeEventId)]);await syncQueue(store.activeEventId);}}
-  saveStore();render();
+  try{
+    if(navigator.onLine){await refreshEvents(true);chooseActiveEvent();if(store.activeEventId){await Promise.all([refreshParticipants(store.activeEventId,!store.cursorByEvent[store.activeEventId]),loadPrices(store.activeEventId),loadBadgeTemplates(store.activeEventId)]);await syncQueue(store.activeEventId);}}
+  }catch(error){console.warn('Préchargement incomplet, affichage du cache local.',error);}
+  saveStore();
+  try{render();}catch(error){showFatalError(error);}
+  const content=document.getElementById('appContent');
+  if(content&&!content.innerHTML.trim())showFatalError(new Error('Le contenu du desk n’a pas pu être affiché (réponse du serveur incomplète).'));
   await focusBadgeFromQuery();
   if(pollTimer)clearInterval(pollTimer);
   pollTimer=setInterval(async()=>{if(!authUser)return;if(!navigator.onLine){apiOnline=false;updateStatus();return;}if(store.activeEventId)await syncQueue(store.activeEventId);await refreshParticipants(store.activeEventId,false);if(Date.now()-lastEventsRefresh>12000)await refreshEvents(true);},3500);
 }
 async function boot(){
-  try{if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});}catch(e){}
+  window.__imagineBuild=APP_BUILD;
+  console.info('Imagine Events Desk — version', APP_BUILD);
+  // Dépannage « page blanche » : /?reset=1 vide le cache hors ligne (sans toucher
+  // aux données locales ni à la file d’attente) puis recharge la page une fois.
+  try{
+    if(new URLSearchParams(location.search).get('reset')==='1'&&!sessionStorage.getItem('imagineResetDone')){
+      sessionStorage.setItem('imagineResetDone','1');
+      const clears=[];
+      if('caches'in window)clears.push(caches.keys().then(keys=>Promise.all(keys.map(k=>caches.delete(k)))));
+      if('serviceWorker'in navigator)clears.push(navigator.serviceWorker.getRegistrations().then(list=>Promise.all(list.map(r=>r.unregister()))));
+      await Promise.all(clears.map(promise=>promise.catch(()=>{})));
+      location.replace(location.pathname);
+      return;
+    }
+  }catch(e){}
+  try{
+    if('serviceWorker'in navigator){
+      // Une nouvelle version du desk prend effet tout de suite : on recharge une
+      // seule fois, et seulement si un service worker pilotait déjà la page.
+      let reloading=false;
+      navigator.serviceWorker.addEventListener('controllerchange',()=>{
+        if(reloading||!navigator.serviceWorker.controller)return;
+        reloading=true;location.reload();
+      });
+      navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    }
+  }catch(e){}
   try{
     if(store.logoutPending){if(!navigator.onLine){renderAuthScreen('unavailable','La déconnexion serveur sera finalisée dès le retour de la connexion.');return;}await api('/api/auth/logout',{method:'POST',body:JSON.stringify({})});store.logoutPending=false;saveStore();}
     const status=await api('/api/auth/status');
@@ -1612,6 +1660,7 @@ document.addEventListener('click',async event=>{
   else if(action==='purge-event'){await openPurgeEventConfirm(id,button.dataset.name||'');return;}
   else if(action==='purge-event-do'){await purgeEvent(id);return;}
   else if(action==='close-modal')closeModal();
+  else if(action==='reload-app'){location.reload();return;}
   else if(action==='add-person')openAddModal();
   else if(action==='import-csv'){if(!getEvent())showToast('Sélectionnez un congrès avant l’import.');else openImportModal();}
   else if(action==='select-import-file'){closeModal();$('#csvFile').click();}
