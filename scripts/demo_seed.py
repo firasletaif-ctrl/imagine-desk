@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +29,16 @@ DEMO_USERS = [
 ]
 
 DEMO_EVENT = ("evt-demo-automne", "Congrès d’automne 2026", "2026-11-12", "Hôtel Laico, Tunis", "TND")
+
+# Congrès volontairement dans la corbeille (supprimé il y a 4 jours) pour montrer
+# le compte à rebours de 30 jours et la restauration.
+DEMO_TRASH_EVENT = ("evt-demo-printemps", "Congrès de printemps 2026", "2026-04-18", "Palais des congrès, Sousse", "TND")
+DEMO_TRASH_DAYS_AGO = 4
+DEMO_TRASH_PEOPLE = [
+    ("Sami Khelifi", "sami.khelifi@example.tn", "Réseau Sud", "participant", "paid", 120.5),
+    ("Hela Zribi", "hela.zribi@example.tn", "Institut Français", "speaker", "exempt", 0),
+    ("Bilel Mansour", "bilel.mansour@example.tn", "Agence Mer", "press", "unpaid", 0),
+]
 
 DEMO_PEOPLE = [
     # nom, e-mail, organisation, catégorie, statut paiement, montant, moyen, référence, heure arrivée, confirmé par
@@ -85,6 +96,37 @@ def main() -> int:
             )
         else:
             con.execute(f"INSERT OR IGNORE INTO events ({columns}) VALUES ({placeholders})", values)
+
+        # Congrès en corbeille : supprimé il y a DEMO_TRASH_DAYS_AGO jours.
+        trash_id, trash_name, trash_date, trash_venue, trash_currency = DEMO_TRASH_EVENT
+        deleted_at = (
+            datetime.now(timezone.utc) - timedelta(days=DEMO_TRASH_DAYS_AGO)
+        ).isoformat(timespec="microseconds")
+        trash_values = (trash_id, trash_name, trash_date, trash_venue, "active", trash_currency,
+                        now, now, deleted_at, "demo.accueil")
+        trash_columns = "id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by"
+        trash_placeholders = ",".join("?" for _ in trash_values)
+        if server.USE_POSTGRES:
+            con.execute(
+                f"INSERT INTO events ({trash_columns}) VALUES ({trash_placeholders}) ON CONFLICT (id) DO NOTHING",
+                trash_values,
+            )
+        else:
+            con.execute(f"INSERT OR IGNORE INTO events ({trash_columns}) VALUES ({trash_placeholders})", trash_values)
+        for index, (full_name, email, company, category, status, amount) in enumerate(DEMO_TRASH_PEOPLE, start=1):
+            person_id = f"p-demo-trash-{index}"
+            if con.execute("SELECT 1 FROM participants WHERE id=?", (person_id,)).fetchone():
+                continue
+            con.execute(
+                """INSERT INTO participants(
+                    id,event_id,name,email,company,category,code,checked_in_at,
+                    payment_status,payment_amount,payment_confirmed_at,payment_confirmed_by,
+                    created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (person_id, trash_id, full_name, email, company, category, f"IE-9{index:03d}",
+                 f"{trash_date}T09:0{index}:00+01:00" if status != "unpaid" else None,
+                 status, amount, now if status != "unpaid" else None,
+                 "demo.accueil" if status != "unpaid" else "", now, now),
+            )
 
         created_people = 0
         for index, (full_name, email, company, category, status, amount, method, reference, hhmm, confirmed_by) in enumerate(DEMO_PEOPLE, start=1):

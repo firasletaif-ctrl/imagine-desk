@@ -18,7 +18,7 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 
 ## Comptes et permissions
 
-- **Administrateur** : crée et archive les congrès, importe les listes, gère les comptes et les mots de passe.
+- **Administrateur** : crée, archive et supprime (corbeille 30 jours) les congrès, importe les listes, gère les comptes et les mots de passe.
 - **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
 - **Corbeille** : la suppression est ouverte à **tous les comptes** et reste réversible ; seul l’administrateur peut **effacer définitivement** (voir « Supprimer ou restaurer un inscrit »).
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
@@ -56,6 +56,48 @@ Points à connaître :
   fonctionnent hors ligne) ;
 - les sauvegardes antérieures à la version 5 restent valides : leurs inscrits sont simplement tous
   considérés comme actifs.
+
+## Supprimer ou restaurer un congrès (corbeille, 30 jours)
+
+Un congrès qui n’a plus lieu d’être ne se détruit pas d’un coup : il part dans la
+**corbeille des congrès** et reste restaurable **30 jours**.
+
+- **Mettre à la corbeille** : *Mes congrès* → icône ⚙ du congrès → **Mettre le
+  congrès à la corbeille** (ou *Paramètres* depuis le desk). L’administrateur seul
+  peut le faire, et une fenêtre rappelle le nombre d’inscrits, d’arrivées et le
+  montant encaissé avant de valider.
+- Effet immédiat : le congrès disparaît de la liste, du sélecteur du haut, des
+  badges, des rapports et des exports. Le desk ne le sert plus (l’API renvoie
+  « Événement introuvable ») et les postes encore ouverts basculent sur un autre
+  congrès.
+- **Restaurer** (tous les comptes) : le congrès revient **exactement comme avant** —
+  inscrits (corbeille comprise), arrivées, paiements, grille tarifaire et modèles
+  de badge.
+- **Effacer définitivement** (administrateur uniquement, case de confirmation
+  obligatoire) : suppression immédiate et irréversible du congrès **et de toutes
+  ses données** (inscrits, arrivées, paiements, tarifs, modèles de badge,
+  historique de synchronisation).
+
+La corbeille est visible en bas de la page **Mes congrès**, avec le nombre de jours
+restants pour chaque congrès. À l’échéance des 30 jours, l’effacement est
+automatique : le nettoyage est vérifié au démarrage du serveur puis à chaque
+consultation de la liste des congrès (aucune tâche de fond à installer).
+
+Points à connaître :
+
+- un congrès **archivé** peut être mis à la corbeille — l’archivage et la
+  suppression sont deux choses différentes (l’archivage ferme le desk, la
+  corbeille retire le congrès) ;
+- les données locales du navigateur de ce congrès (liste, file d’attente,
+  tarifs, modèles) sont effacées au moment de la suppression ; une restauration
+  les recharge depuis le serveur ;
+- les actions de check-in en attente sur un poste ne peuvent pas être synchronisées
+  vers un congrès en corbeille ;
+- la sauvegarde ZIP conserve la corbeille des congrès (`deleted_at` / `deleted_by`
+  dans `01_events.csv`, format v6) : restaurer une sauvegarde restitue aussi les
+  congrès supprimés, avec leur compte à rebours ;
+- les sauvegardes v5 et antérieures restent valides : leurs congrès sont
+  simplement tous considérés comme actifs.
 
 ## Import CSV ou Excel
 
@@ -216,7 +258,7 @@ Le navigateur conserve aussi un cache local de la liste pour le mode hors ligne.
 
 ### Jeu de données de démonstration
 
-Pour recréer une démo complète (2 comptes, 1 congrès, 8 inscrits avec paiements variés) :
+Pour recréer une démo complète (2 comptes, 1 congrès actif de 8 inscrits avec paiements variés, plus 1 congrès dans la corbeille depuis 4 jours pour illustrer la restauration sur 30 jours) :
 
 ```bash
 python scripts/demo_seed.py           # crée les données manquantes
@@ -238,7 +280,7 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
 - `manifest.json` (format, version, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
+- `01_events.csv` (avec la corbeille des congrès), `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille des inscrits), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.
