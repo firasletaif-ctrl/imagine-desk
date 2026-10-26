@@ -104,6 +104,20 @@ function updateStatus(){
   el.innerHTML=`<i></i><span>${esc(text)}</span>`;
   const footer=$('#footerSync');if(footer)footer.textContent=n?`${n} action${n===1?'':'s'} en attente de synchronisation.`:'Les données restent séparées par congrès.';
 }
+// Version des fichiers réellement chargés dans cet onglet (?v=… dans index.html).
+const ASSET_VERSION=(()=>{try{const script=[...document.scripts].find(tag=>/\/app\.js\?v=/.test(tag.src||''));const match=script&&String(script.src).match(/[?&]v=(\d+)/);return match?match[1]:'';}catch(e){return '';}})();
+let reloadingForVersion=false;
+function checkAssetVersion(response){
+  // Le serveur annonce sa version : un onglet resté ouvert sur une ancienne
+  // version se recharge une seule fois, au lieu d’enchaîner les erreurs.
+  try{
+    const server=response.headers&&response.headers.get?response.headers.get('X-App-Version'):'';
+    if(!server||!ASSET_VERSION||server===ASSET_VERSION||reloadingForVersion)return;
+    reloadingForVersion=true;
+    console.info(`Nouvelle version disponible (${ASSET_VERSION} → ${server}) : rechargement.`);
+    location.reload();
+  }catch(e){}
+}
 function authHeaders(extra={}){
   // Le jeton en en-tête fonctionne même quand le cookie de session est refusé
   // (page affichée dans une iframe d’un autre domaine, cookies tiers bloqués).
@@ -117,6 +131,7 @@ async function api(path,options={}){
   if(options.body&&!headers['Content-Type'])headers['Content-Type']='application/json';
   let response;
   try{response=await fetch(path,{...options,headers,cache:'no-store',credentials:'same-origin'});}catch(error){apiOnline=false;updateStatus();throw new Error('Serveur injoignable. Les actions de check-in restent enregistrées sur cet appareil.');}
+  checkAssetVersion(response);
   let data={};try{data=await response.json();}catch(e){}
   if(response.status===401&&!String(path).startsWith('/api/auth/')){apiOnline=false;authUser=null;store.cachedUser=null;store.authCachedAt=0;clearSessionToken();saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
   if(!response.ok){const error=new Error(data.error||`Erreur serveur (${response.status}).`);error.status=response.status;throw error;}

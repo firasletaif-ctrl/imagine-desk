@@ -1,5 +1,5 @@
-const CACHE_NAME = 'imagine-events-desk-shell-v16-session';
-const SHELL = ['/', '/styles.css?v=15', '/app.js?v=15', '/vendor/qrcode.js', '/vendor/qrcode-utf8.js', '/manifest.webmanifest', '/img/logo.png', '/img/favicon-32.png'];
+const CACHE_NAME = 'imagine-events-desk-shell-v17-session';
+const SHELL = ['/', '/styles.css?v=16', '/app.js?v=16', '/vendor/qrcode.js', '/vendor/qrcode-utf8.js', '/manifest.webmanifest', '/img/logo.png', '/img/favicon-32.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).catch(() => {}));
   self.skipWaiting();

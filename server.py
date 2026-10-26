@@ -99,6 +99,21 @@ def db_backend() -> str:
     return "postgres" if USE_POSTGRES else "sqlite"
 
 
+def _asset_version() -> str:
+    """Version des fichiers statiques (`app.js?v=…`), lue dans index.html.
+
+    Sert à détecter un onglet resté ouvert sur une ancienne version du desk :
+    la réponse API porte cette version et la page se recharge d’elle-même."""
+    try:
+        match = re.search(r"app\.js\?v=(\d+)", (PUBLIC / "index.html").read_text(encoding="utf-8"))
+        return match.group(1) if match else ""
+    except OSError:
+        return ""
+
+
+ASSET_VERSION = _asset_version()
+
+
 def redact_database_url(url: str = "") -> str:
     """Masque le mot de passe avant tout affichage ou journal."""
     url = url or DATABASE_URL
@@ -1754,6 +1769,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
+        if ASSET_VERSION:
+            self.send_header("X-App-Version", ASSET_VERSION)
         if self.path.startswith("/api/"):
             self.send_header("Cache-Control", "no-store")
         for key, value in (extra_headers or {}).items():
@@ -1850,7 +1867,9 @@ class Handler(BaseHTTPRequestHandler):
         else:
             value = f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite={same_site}; Max-Age={SESSION_TTL_SECONDS}"
         if secure:
-            value += "; Secure"
+            # `Partitioned` (CHIPS) permet au cookie d’exister dans une iframe
+            # d’un autre domaine même avec les cookies tiers bloqués.
+            value += "; Secure; Partitioned"
         return {"Set-Cookie":value}
 
     def require_user(self):
