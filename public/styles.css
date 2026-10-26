@@ -411,3 +411,14 @@ tr.row-selected td:first-child{box-shadow:inset 3px 0 0 #0B1D3A}
   .trash-row{flex-direction:column;align-items:flex-start}
   .trash-actions{width:100%;justify-content:flex-end}
 }
+
+/* ═══ Corbeille des congrès ═══ */
+.events-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px;flex-wrap:wrap}
+.events-toolbar .count-label{margin:0}
+.trash-target{display:flex;flex-direction:column;gap:4px;padding:13px 16px;border:1px solid #E9EEF6;border-radius:13px;background:#FCFDFF}
+.trash-target strong{color:#0B1D3A;font-size:16px;overflow-wrap:anywhere}
+.trash-target span{color:#5E6F87;font-size:13.5px}
+.check-line{display:flex;align-items:flex-start;gap:10px;margin-top:14px;font-size:13.5px;color:#3E4B5E;cursor:pointer}
+.check-line input{margin-top:2px;width:17px;height:17px;flex:none;accent-color:#C41E3A}
+.btn.icon-danger{color:#C41E3A;border-color:#F3D9DE;background:#FFF7F8}
+.btn.icon-danger:hover{color:#fff;border-color:#C41E3A;background:#C41E3A}

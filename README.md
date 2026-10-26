@@ -18,11 +18,31 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 
 ## Comptes et permissions
 
-- **Administrateur** : crée et archive les congrès, importe les listes, gère les comptes et les mots de passe.
+- **Administrateur** : crée, archive et supprime les congrès (corbeille), importe les listes, gère les comptes et les mots de passe.
 - **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
-- **Corbeille** : la suppression est ouverte à **tous les comptes** et reste réversible ; seul l’administrateur peut **effacer définitivement** (voir « Supprimer ou restaurer un inscrit »).
+- **Corbeille** : un inscrit peut être supprimé par **tous les comptes** ; un congrès, par l’**administrateur**. Dans les deux cas la suppression est **réversible** : seul l’administrateur peut effacer définitivement (voir « Supprimer ou restaurer un inscrit » et « Supprimer ou restaurer un congrès »).
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
 - Les mots de passe ne doivent pas être partagés. Au premier test dans l’aperçu, utilisez un mot de passe provisoire, pas votre mot de passe personnel.
+
+## Supprimer ou restaurer un congrès (corbeille)
+
+Dans l’onglet **Congrès**, chaque carte possède une icône corbeille (administrateur). La suppression
+demande confirmation, rappelle le nombre d’inscrits et d’arrivées, et **ne détruit rien** : le congrès
+part dans la corbeille avec toute sa liste d’inscrits, ses paiements, sa grille tarifaire et ses
+modèles de badge.
+
+- Le congrès supprimé disparaît de la liste, du sélecteur de congrès et de tous les écrans.
+- **Congrès supprimés** (bouton en haut de l’onglet, avec un compteur) liste les congrès de la
+  corbeille, avec la date et l’auteur de la suppression :
+  - **Restaurer** : le congrès revient exactement comme avant, inscrits et paiements compris ;
+  - **Effacer** (case « Je comprends que cette suppression est définitive ») : le congrès et **tout
+    son contenu** sont retirés de la base. Cette action ne se rattrape pas.
+- Tant qu’un congrès est dans la corbeille, ses inscrits, sa grille tarifaire et ses badges refusent
+  toute écriture (le serveur répond « Congrès introuvable ») : aucune donnée ne peut s’y ajouter
+  par erreur pendant qu’il attend une restauration.
+- La sauvegarde ZIP (version 6) conserve la corbeille des congrès (`deleted_at` / `deleted_by`,
+  colonnes 9 et 10 de `01_events.csv`). Les sauvegardes antérieures restent valides : leurs congrès
+  sont simplement tous considérés comme actifs.
 
 ## Supprimer ou restaurer un inscrit (corbeille)
 
@@ -238,7 +258,7 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
 - `manifest.json` (format, version, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.

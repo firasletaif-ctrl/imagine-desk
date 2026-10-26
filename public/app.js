@@ -2,7 +2,7 @@
 
 const STORAGE_KEY = 'imagine-events-desk-platform-v1';
 const categoryNames = { participant:'Participant', vip:'VIP', speaker:'Intervenant', press:'Presse', team:'Équipe' };
-const defaultStore = { events:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, trashCountByEvent:{}, trashByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
+const defaultStore = { events:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, trashCountByEvent:{}, trashByEvent:{}, trashEvents:[], deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
 function loadStore(){
   try { const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null'); if(saved&&typeof saved==='object') return {...defaultStore,...saved,events:Array.isArray(saved.events)?saved.events:[],peopleByEvent:saved.peopleByEvent||{},cursorByEvent:saved.cursorByEvent||{},queueByEvent:saved.queueByEvent||{},pricesByEvent:saved.pricesByEvent||{},deviceId:saved.deviceId||''}; }
   catch(e){ console.warn('Cache locale non disponible.',e); }
@@ -111,16 +111,19 @@ async function api(path,options={}){
   if(!response.ok){const error=new Error(data.error||`Erreur serveur (${response.status}).`);error.status=response.status;throw error;}
   apiOnline=true;updateStatus();return data;
 }
+function visibleEvents(){return store.events.filter(event=>!event.deletedAt);}
 function chooseActiveEvent(){
-  if(store.activeEventId&&store.events.some(e=>e.id===store.activeEventId))return;
-  const active=store.events.find(e=>e.status!=='archived');
-  store.activeEventId=(active||store.events[0])?.id||'';
+  const events=visibleEvents();
+  if(store.activeEventId&&events.some(e=>e.id===store.activeEventId))return;
+  const active=events.find(e=>e.status!=='archived');
+  store.activeEventId=(active||events[0])?.id||'';
 }
 function renderEventSelect(){
   const select=$('#eventSelect');if(!select)return;
-  const options=store.events.map(e=>`<option value="${esc(e.id)}">${esc(e.name)}${e.status==='archived'?' · Archivé':''}</option>`).join('');
+  const events=visibleEvents();
+  const options=events.map(e=>`<option value="${esc(e.id)}">${esc(e.name)}${e.status==='archived'?' · Archivé':''}</option>`).join('');
   select.innerHTML=options||'<option value="">Aucun congrès créé</option>';
-  select.disabled=!store.events.length;select.value=store.activeEventId||'';
+  select.disabled=!events.length;select.value=store.activeEventId||'';
 }
 const pageMeta={
   home:{eyebrow:'ACCUEIL · SUIVI EN DIRECT',title:'Desk d’accueil',description:'Suivez les arrivées et gérez votre point d’accueil pour ce congrès.'},
@@ -220,17 +223,29 @@ function tariffReportHTML(){
 function renderReports(){const stats=makeStats(),cats=['participant','vip','speaker','press','team'];const rows=cats.map(c=>{const list=getPeople().filter(p=>(p.category||'participant')===c);if(!list.length)return '';const arrived=list.filter(p=>p.checkedIn).length,pct=Math.round(arrived/list.length*100);return `<div class="report-bar"><div class="report-bar-label"><span>${esc(displayCategory(c))}</span><span>${arrived} / ${list.length} · ${pct}%</span></div><div class="progress"><i class="${categoryClass(c)}" style="width:${pct}%"></i></div></div>`;}).join('');const present=getPeople().filter(p=>p.checkedIn).slice().sort((a,b)=>String(b.checkedInAt||'').localeCompare(String(a.checkedInAt||'')));return `<div class="report-grid"><section class="card report-card"><div class="card-head"><div><h2 class="card-title">État des arrivées</h2><p class="card-subtitle">Progression globale et par catégorie</p></div></div><div class="report-summary"><div class="mini-stat"><span>Inscrits</span><strong>${stats.total}</strong></div><div class="mini-stat"><span>Arrivés</span><strong>${stats.arrived}</strong></div><div class="mini-stat"><span>Présence</span><strong>${stats.percent}%</strong></div></div><div class="report-bars">${rows||'<div class="empty-state">Aucune donnée à afficher.</div>'}</div></section><section class="card report-card"><div class="card-head"><div><h2 class="card-title">Liste de présence</h2><p class="card-subtitle">Arrivées confirmées sur cet événement</p></div></div><div class="report-table"><table><thead><tr><th>Participant</th><th>Catégorie</th><th>Heure</th></tr></thead><tbody>${present.length?present.map(p=>`<tr><td>${esc(p.name)}</td><td><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></td><td>${esc(localTime(p.checkedInAt))}</td></tr>`).join(''):'<tr><td colspan="3"><div class="empty-state">Aucune arrivée confirmée.</div></td></tr>'}</tbody></table></div></section></div>
   <section class="card report-card report-payments"><div class="card-head"><div><h2 class="card-title">Confirmation des paiements</h2><p class="card-subtitle">Encaissements et exonérations de ce congrès</p></div><span class="pay-total">${icon('cash',12)}${esc(money(stats.collected))} encaissés</span></div><div class="report-summary four"><div class="mini-stat"><span>Encaissé</span><strong class="money">${esc(money(stats.collected))}</strong></div><div class="mini-stat"><span>Payés</span><strong>${stats.paid}</strong></div><div class="mini-stat"><span>À encaisser</span><strong>${stats.toPay}</strong></div><div class="mini-stat"><span>Exonérés</span><strong>${stats.exempt}</strong></div></div><div class="report-table"><table><thead><tr><th>Participant</th><th>Statut</th><th>Montant</th><th>Tarif</th><th>Moyen</th><th>Référence</th><th>Confirmé le</th><th>Par</th></tr></thead><tbody>${paymentRowsHTML()}</tbody></table></div><div class="footnote">${icon('info')}<span>Chaque confirmation est horodatée et signée par l’agent connecté. Les paiements en attente de synchronisation apparaissent après envoi au serveur.</span></div></section>${tariffReportHTML()}${noticeHTML(pendingTotal()?'warning':'',pendingTotal()?`<strong>${pendingTotal()} action(s) n’ont pas encore été envoyées au serveur.</strong> Exportez après synchronisation si vous voulez un bilan centralisé.`:`<strong>Export de l’événement actif.</strong> Le CSV contient la catégorie, la présence, le code badge, l’heure d’arrivée et le détail du paiement.`)}`;}
 function renderEvents(){
-  if(!store.events.length)return renderOnboarding();
   const admin=authUser?.role==='admin';
-  const cards=store.events.map(e=>{const total=Number(e.total||0),arrived=Number(e.arrived||0),pct=total?Math.round(arrived/total*100):0;const edit=admin?`<button class="icon-action" type="button" data-action="edit-event" data-id="${esc(e.id)}" title="Paramètres">${icon('settings',13)}</button>`:'';return `<article class="event-card"><div class="event-card-top"><div class="event-card-title"><h3>${esc(e.name)}</h3><p><span>${icon('calendar',12)}${esc(dateLabel(e.date))}</span><span>${icon('pin',12)}${esc(e.venue||'Lieu à préciser')}</span></p></div><span class="event-status ${e.status==='archived'?'archived':''}">${e.status==='archived'?'Archivé':'Actif'}</span></div><div class="event-card-stats"><span>Inscrits<strong>${total}</strong></span><span>Arrivés<strong>${arrived}</strong></span><span>Présence<strong>${pct}%</strong></span></div><div class="event-card-actions"><button class="btn btn-primary btn-sm" type="button" data-action="open-event" data-id="${esc(e.id)}">Ouvrir le desk ${icon('arrow',12)}</button><div>${edit}</div></div></article>`;}).join('');
+  const events=visibleEvents();
+  if(!events.length){
+    // Cas particulier : plus aucun congrès visible, mais la corbeille peut en contenir.
+    const trashed=admin?(store.trashEvents||[]).length:0;
+    if(trashed)return `${renderOnboarding()}<div class="notice" style="margin-top:14px">${icon('trash')}<span><strong>${trashed} congrès dans la corbeille.</strong> Vous pouvez les restaurer tels quels.</span><button class="btn btn-secondary btn-sm" type="button" data-action="open-events-trash">${icon('rotate',12)}Ouvrir la corbeille</button></div>`;
+    return renderOnboarding();
+  }
+  const cards=events.map(e=>{
+    const total=Number(e.total||0),arrived=Number(e.arrived||0),pct=total?Math.round(arrived/total*100):0;
+    const tools=admin?`<button class="icon-action" type="button" data-action="edit-event" data-id="${esc(e.id)}" title="Paramètres">${icon('settings',13)}</button><button class="icon-action danger" type="button" data-action="trash-event" data-id="${esc(e.id)}" title="Supprimer ce congrès" aria-label="Supprimer ce congrès">${icon('trash',13)}</button>`:'';
+    return `<article class="event-card"><div class="event-card-top"><div class="event-card-title"><h3>${esc(e.name)}</h3><p><span>${icon('calendar',12)}${esc(dateLabel(e.date))}</span><span>${icon('pin',12)}${esc(e.venue||'Lieu à préciser')}</span></p></div><span class="event-status ${e.status==='archived'?'archived':''}">${e.status==='archived'?'Archivé':'Actif'}</span></div><div class="event-card-stats"><span>Inscrits<strong>${total}</strong></span><span>Arrivés<strong>${arrived}</strong></span><span>Présence<strong>${pct}%</strong></span></div><div class="event-card-actions"><button class="btn btn-primary btn-sm" type="button" data-action="open-event" data-id="${esc(e.id)}">Ouvrir le desk ${icon('arrow',12)}</button><div>${tools}</div></div></article>`;
+  }).join('');
   const addCard=admin?`<button class="event-add-card" type="button" data-action="new-event"><span class="plus-circle">${icon('plus',17)}</span><strong>Créer un autre congrès</strong><small>Nouvelle liste · nouvel espace d’accueil</small></button>`:'';
-  return `<div class="notice">${icon('info')}<span>Chaque congrès possède son propre fichier d’inscrits, son suivi et ses paramètres. Les événements archivés restent consultables.</span></div><div class="events-grid">${cards}${addCard}</div>`;
+  const trashed=admin?(store.trashEvents||[]).length:0;
+  const trashBar=admin?`<div class="events-toolbar"><span class="count-label">${events.length} congrès actif${events.length===1?'':'s'}</span><button class="btn btn-secondary btn-sm trash-button" type="button" data-action="open-events-trash">${icon('trash',14)}Congrès supprimés${trashed?`<b class="trash-count">${trashed}</b>`:''}</button></div>`:'';
+  return `<div class="notice">${icon('info')}<span>Chaque congrès possède son propre fichier d’inscrits, son suivi et ses paramètres. Les événements archivés restent consultables ; un congrès supprimé part dans la corbeille et peut être restauré.</span></div>${trashBar}<div class="events-grid">${cards}${addCard}</div>`;
 }
-function setPage(page){if(!pageMeta[page])return;currentPage=page;render();window.scrollTo({top:0,behavior:'smooth'});}
+function setPage(page){if(!pageMeta[page])return;currentPage=page;render();if(page==='events'&&authUser?.role==='admin'){refreshTrashEvents(true).then(()=>{if(currentPage==='events')render();});}window.scrollTo({top:0,behavior:'smooth'});}
 function showToast(message){const el=$('#toast');el.innerHTML=`${icon('check',15)}<span>${esc(message)}</span>`;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3400);}
 function mergePeople(eventId,participants){if(!Array.isArray(participants))return false;const raw=Array.isArray(store.peopleByEvent[eventId])?store.peopleByEvent[eventId]:[];const map=new Map(raw.map(p=>[String(p.id),p]));let changed=false;participants.forEach(p=>{if(!p||!p.id)return;const old=map.get(String(p.id));if(p.deletedAt){if(old){map.delete(String(p.id));changed=true;}return;}if(!old||JSON.stringify(old)!==JSON.stringify(p)){map.set(String(p.id),p);changed=true;}});store.peopleByEvent[eventId]=Array.from(map.values()).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));applyPending(eventId);return changed;}
 function applyPending(eventId){const list=store.peopleByEvent[eventId]||[];const map=new Map(list.map(p=>[String(p.id),p]));for(const op of getQueue(eventId)){if(op.action==='create'&&op.participant&&!map.has(String(op.participant.id)))map.set(String(op.participant.id),{...op.participant});if(op.action==='checkin'||op.action==='undo'){const p=map.get(String(op.participantId));if(p){p.checkedIn=op.action==='checkin';p.checkedInAt=op.action==='checkin'?(op.localTime||new Date().toISOString()):'';}}if(op.action==='payment'){const p=map.get(String(op.participantId)),pay=op.payment||{};if(p){const status=['paid','exempt'].includes(pay.status)?pay.status:'unpaid';p.paymentStatus=status;p.paymentAmount=status==='paid'?Number(pay.amount||0):0;p.paymentMethod=status==='paid'?(pay.method||''):'';p.paymentReference=status==='paid'?(pay.reference||''):'';p.paymentTariff=status==='paid'?(pay.tariff||''):'';p.paymentConfirmedAt=status==='unpaid'?'':(op.localTime||new Date().toISOString());p.paymentConfirmedBy=status==='unpaid'?'':(authUser?.username||p.paymentConfirmedBy||'');}}}store.peopleByEvent[eventId]=Array.from(map.values()).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));}
-async function refreshEvents(silent=false){if(eventsRefreshing||!navigator.onLine)return;eventsRefreshing=true;try{const data=await api('/api/events');store.events=data.events||[];lastEventsRefresh=Date.now();chooseActiveEvent();if(store.activeEventId)loadPrices(store.activeEventId);saveStore();if(!silent||currentPage==='events')render(true);}catch(error){apiOnline=false;updateStatus();}finally{eventsRefreshing=false;}}
+async function refreshEvents(silent=false){if(eventsRefreshing||!navigator.onLine)return;eventsRefreshing=true;try{const data=await api('/api/events');store.events=data.events||[];lastEventsRefresh=Date.now();if(authUser?.role==='admin'&&(currentPage==='events'||$('#eventsTrashRoot')))await refreshTrashEvents(true);chooseActiveEvent();if(store.activeEventId)loadPrices(store.activeEventId);saveStore();if(!silent||currentPage==='events')render(true);}catch(error){apiOnline=false;updateStatus();}finally{eventsRefreshing=false;}}
 async function refreshParticipants(eventId=store.activeEventId,forceFull=false){if(!eventId||!navigator.onLine||participantRefreshes.has(eventId))return;participantRefreshes.add(eventId);try{const cursor=forceFull?'':(store.cursorByEvent[eventId]||'');const url=`/api/events/${encodeURIComponent(eventId)}/participants${cursor?`?since=${encodeURIComponent(cursor)}`:''}`;const data=await api(url);const changed=mergePeople(eventId,data.participants||[]);if(typeof data.trashCount==='number')setTrashCount(eventId,data.trashCount);if(data.serverTime)store.cursorByEvent[eventId]=data.serverTime;apiOnline=true;saveStore();if(changed&&eventId===store.activeEventId)render(true);else updateStatus();}catch(error){apiOnline=false;updateStatus();}finally{participantRefreshes.delete(eventId);}}
 async function syncQueue(eventId=store.activeEventId){if(!eventId||!navigator.onLine||syncLocks.has(eventId))return;const queue=getQueue(eventId);if(!queue.length)return;syncLocks.add(eventId);try{const data=await api(`/api/events/${encodeURIComponent(eventId)}/sync`,{method:'POST',body:JSON.stringify({operations:queue,deviceId:store.deviceId})});const done=new Set((data.results||[]).filter(r=>r.ok).map(r=>r.opId));if(Array.isArray(data.participants))mergePeople(eventId,data.participants);store.queueByEvent[eventId]=queue.filter(op=>!done.has(op.opId));applyPending(eventId);if(data.serverTime)store.cursorByEvent[eventId]=data.serverTime;saveStore();if(eventId===store.activeEventId)render(true);if(done.size){refreshEvents(true);}const failed=(data.results||[]).filter(r=>!r.ok);if(failed.length)showToast(`${failed.length} action(s) à vérifier : ${failed[0].error||'participant introuvable'}.`);}catch(error){apiOnline=false;updateStatus();}finally{syncLocks.delete(eventId);}}
 function renderAuthScreen(mode='login',message=''){
@@ -450,7 +465,7 @@ function openBadgeModal(id){
   const back=badgeHasBack(model)?`<div class="field-hint" style="margin:14px 0 6px;text-align:center">Verso</div><div class="modal-badge">${badgeFrame(person,model,'back')}</div>`:'';
   openModal(`<div class="modal-head"><div><h2>Aperçu du badge</h2><p>Modèle « ${esc(model?.name||'Modèle de test')} » · ${format}${back?' · recto-verso':''}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="modal-badge">${badgeFrame(person,model,'front')}</div>${back}<div class="field-hint" style="margin-top:11px;text-align:center">${model?.qrMode==='url'?`QR code : ${esc(qrPayload(person,model))}`:'Le QR code contient la référence du badge'} · rendu à l’échelle de l’impression.</div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-secondary" type="button" data-action="badge-studio">${icon('file')}Modifier le modèle</button><button class="btn btn-primary" type="button" data-action="print-badge" data-id="${esc(person.id)}">${icon('printer')}Imprimer</button></div>`,true);
 }
-function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>Corbeille, en cas d’erreur</strong><br>Cochez un ou plusieurs inscrits, puis <em>Mettre à la corbeille</em> : ils quittent la liste, les compteurs et les badges sans être perdus. Le bouton <em>Corbeille</em> les restaure tels quels ; seul l’administrateur peut les effacer définitivement.</div></div><div class="guide-step"><b>8</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
+function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>Corbeille, en cas d’erreur</strong><br>Cochez un ou plusieurs inscrits, puis <em>Mettre à la corbeille</em> : ils quittent la liste, les compteurs et les badges sans être perdus. Le bouton <em>Corbeille</em> les restaure tels quels ; seul l’administrateur peut les effacer définitivement.</div></div><div class="guide-step"><b>8</b><div><strong>Supprimer un congrès</strong><br>Un administrateur peut retirer un congrès depuis l’onglet <em>Congrès</em> : il part dans <em>Congrès supprimés</em> avec ses inscrits et ses badges, et se restaure en un appui. Seul l’effacement définitif est irréversible.</div></div><div class="guide-step"><b>9</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
 async function openAccountsModal(){
   if(authUser?.role!=='admin'){showToast('Seul l’administrateur peut gérer les comptes.');return;}
   let storage=null;
@@ -1490,6 +1505,117 @@ function openPurgeConfirm(ids,all=false){
   <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="open-trash">Annuler</button><button class="btn btn-danger" type="button" data-action="purge-do" data-ids="${esc((ids||[]).join(','))}" data-all="${all?'1':'0'}" id="purgeButton" disabled>${icon('trash')}Effacer définitivement</button></div>`,true);
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Corbeille des congrès : suppression réversible, restauration et
+   effacement définitif (réservé aux administrateurs).
+   ═══════════════════════════════════════════════════════════════════ */
+async function refreshTrashEvents(silent=true){
+  if(authUser?.role!=='admin'||!navigator.onLine)return store.trashEvents||[];
+  try{
+    const data=await api('/api/events?trash=1');
+    store.trashEvents=Array.isArray(data.events)?data.events:[];
+    saveStore();
+    return store.trashEvents;
+  }catch(error){
+    if(!silent)showToast(error.message||'Impossible de charger la corbeille des congrès.');
+    return store.trashEvents||[];
+  }
+}
+function trashEventsCount(){return (store.trashEvents||[]).length;}
+function forgetEventCache(eventId){
+  delete store.peopleByEvent[eventId];
+  delete store.cursorByEvent[eventId];
+  delete store.queueByEvent[eventId];
+  delete store.pricesByEvent[eventId];
+  delete store.badgeTemplatesByEvent[eventId];
+  delete store.trashCountByEvent[eventId];
+  delete store.trashByEvent[eventId];
+}
+async function trashEvent(eventId){
+  const event=store.events.find(item=>String(item.id)===String(eventId));
+  if(!event){showToast('Congrès introuvable.');return false;}
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut supprimer un congrès.');return false;}
+  if(!requireOnline())return false;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(eventId)}`,{method:'DELETE'});
+    store.events=store.events.filter(item=>String(item.id)!==String(eventId));
+    forgetEventCache(eventId);
+    if(String(store.activeEventId)===String(eventId)){store.activeEventId='';chooseActiveEvent();}
+    await refreshTrashEvents(true);
+    saveStore();
+    closeModal();
+    currentPage='events';
+    render();
+    showToast(`« ${event.name} » est dans la corbeille. Vous pouvez le restaurer à tout moment.`);
+    if(store.activeEventId)await Promise.all([refreshParticipants(store.activeEventId,true),loadPrices(store.activeEventId),loadBadgeTemplates(store.activeEventId)]);
+    return true;
+  }catch(error){showToast(error.message||'Suppression impossible.');return false;}
+}
+function openTrashEventConfirm(eventId){
+  const event=store.events.find(item=>String(item.id)===String(eventId));
+  if(!event){showToast('Congrès introuvable.');return;}
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut supprimer un congrès.');return;}
+  const total=Number(event.total||0),arrived=Number(event.arrived||0);
+  openModal(`<div class="modal-head"><div><h2>Supprimer ce congrès</h2><p>${esc(dateLabel(event.date))} · ${esc(event.venue||'Lieu à préciser')}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body">
+    <div class="trash-target"><strong>${esc(event.name)}</strong><span>${total} inscrit${total===1?'':'s'} · ${arrived} arrivé${arrived===1?'':'s'} · grille tarifaire et badges inclus</span></div>
+    <div class="notice">${icon('info')}<span>Le congrès quitte la liste et le sélecteur, mais <strong>rien n’est effacé</strong> : il part dans la corbeille avec toute sa liste d’inscrits, ses paiements et ses modèles de badge. Une restauration le remet exactement comme avant.</span></div>
+    <div class="field-hint">Pour libérer définitivement la place, un administrateur pourra ensuite l’effacer depuis « Congrès supprimés ».</div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-danger" type="button" data-action="trash-event-do" data-id="${esc(event.id)}">${icon('trash')}Mettre à la corbeille</button></div>`);
+}
+async function restoreEvent(eventId){
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut restaurer un congrès.');return false;}
+  if(!requireOnline())return false;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(eventId)}/restore`,{method:'POST',body:'{}'});
+    store.trashEvents=(store.trashEvents||[]).filter(item=>String(item.id)!==String(eventId));
+    await refreshEvents(true);
+    saveStore();
+    render();
+    if($('#eventsTrashRoot'))await openEventsTrashModal(true);
+    showToast(data.already?`« ${data.name} » était déjà actif.`:`« ${data.name} » est restauré avec ses ${data.participants} inscrit(s).`);
+    return true;
+  }catch(error){showToast(error.message||'Restauration impossible.');return false;}
+}
+async function purgeEvent(eventId){
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut effacer définitivement un congrès.');return false;}
+  if(!requireOnline())return false;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(eventId)}/purge`,{method:'POST',body:'{}'});
+    store.trashEvents=(store.trashEvents||[]).filter(item=>String(item.id)!==String(eventId));
+    forgetEventCache(eventId);
+    saveStore();
+    closeModal();
+    render();
+    if(currentPage==='events'&&!$('#eventsTrashRoot'))await openEventsTrashModal(true);
+    showToast(`« ${data.name} » et ses ${data.participants} inscrit(s) ont été effacés définitivement.`);
+    return true;
+  }catch(error){showToast(error.message||'Effacement impossible.');return false;}
+}
+function openPurgeEventConfirm(eventId){
+  const event=(store.trashEvents||[]).find(item=>String(item.id)===String(eventId));
+  if(!event){showToast('Congrès introuvable dans la corbeille.');return;}
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut effacer définitivement un congrès.');return;}
+  openModal(`<div class="modal-head"><div><h2>Effacer définitivement</h2><p>Action irréversible</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body">
+    <div class="trash-target"><strong>${esc(event.name)}</strong><span>${Number(event.total||0)} inscrit(s) · ${Number(event.arrived||0)} arrivée(s)</span></div>
+    <div class="notice warning">${icon('info')}<span>Le congrès et <strong>tous ses inscrits, paiements, tarifs et modèles de badge</strong> seront supprimés de la base. Cette action ne peut pas être annulée.</span></div>
+    <label class="check-line"><input type="checkbox" id="purgeEventConfirm"> <span>Je comprends que cette suppression est définitive.</span></label>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-danger" type="button" data-action="purge-event-do" data-id="${esc(event.id)}" disabled>${icon('trash')}Effacer définitivement</button></div>`);
+}
+async function openEventsTrashModal(silent=false){
+  if(authUser?.role!=='admin'){showToast('Seul un administrateur peut consulter la corbeille des congrès.');return;}
+  const list=await refreshTrashEvents(silent);
+  const rows=list.length?list.map(event=>`<div class="trash-row"><div class="trash-person"><strong>${esc(event.name)}</strong><span>${esc(dateLabel(event.date))} · ${esc(event.venue||'Lieu à préciser')} · ${Number(event.total||0)} inscrit(s)</span><small>Supprimé le ${esc(dateTimeLabel(event.deletedAt))}${event.deletedBy?` par ${esc(event.deletedBy)}`:''}</small></div><div class="trash-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="restore-event" data-id="${esc(event.id)}">${icon('rotate',12)}Restaurer</button><button class="btn btn-secondary btn-sm icon-danger" type="button" data-action="purge-event" data-id="${esc(event.id)}">${icon('trash',12)}Effacer</button></div></div>`).join(''):'<div class="empty-state"><strong>La corbeille est vide</strong>Aucun congrès supprimé pour le moment.</div>';
+  openModal(`<div id="eventsTrashRoot"><div class="modal-head"><div><h2>Congrès supprimés</h2><p>${list.length} congrès · restauration possible à tout moment</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>
+  <div class="modal-body">
+    <div class="notice">${icon('info')}<span>Un congrès dans la corbeille n’apparaît plus dans la liste ni dans le sélecteur. <strong>Restaurer</strong> le remet tel quel, avec ses inscrits, ses paiements et ses badges. L’effacement définitif, lui, ne se rattrape pas.</span></div>
+    <div class="trash-list-wrap">${rows}</div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button></div></div>`,true);
+}
 // Navigation et actions de l’interface.
 document.addEventListener('click',async event=>{
   const page=event.target.closest('[data-page]');if(page){event.preventDefault();setPage(page.dataset.page);return;}
@@ -1512,6 +1638,12 @@ document.addEventListener('click',async event=>{
   else if(action==='new-event')openEventModal();
   else if(action==='settings'){const ev=getEvent();if(ev)openEventModal(ev);else openEventModal();}
   else if(action==='edit-event')openEventModal(getEvent(id));
+  else if(action==='trash-event'){openTrashEventConfirm(id);return;}
+  else if(action==='trash-event-do'){await trashEvent(id);return;}
+  else if(action==='open-events-trash'){await openEventsTrashModal();return;}
+  else if(action==='restore-event'){await restoreEvent(id);return;}
+  else if(action==='purge-event'){openPurgeEventConfirm(id);return;}
+  else if(action==='purge-event-do'){await purgeEvent(id);return;}
   else if(action==='close-modal')closeModal();
   else if(action==='add-person')openAddModal();
   else if(action==='import-csv'){if(!getEvent())showToast('Sélectionnez un congrès avant l’import.');else openImportModal();}
@@ -1560,6 +1692,7 @@ document.addEventListener('change',async event=>{
   if(event.target.matches&&event.target.matches('[data-select-id]')){togglePersonSelection(event.target.dataset.selectId,event.target.checked,event.target);return;}
   if(event.target.id==='purgeConfirm'){const confirmButton=$('#purgeButton');if(confirmButton)confirmButton.disabled=!event.target.checked;return;}
   if(event.target.id==='purgeAllConfirm'){const allButton=$('#purgeAllButton');if(allButton)allButton.disabled=!event.target.checked;return;}
+  if(event.target.id==='purgeEventConfirm'){const eventButton=$('[data-action="purge-event-do"]');if(eventButton)eventButton.disabled=!event.target.checked;return;}
   if(event.target.id==='paymentStatus'){const paid=event.target.value==='paid';['paymentAmount','paymentMethod','paymentReference'].forEach(id=>{const field=$('#'+id);if(field)field.disabled=!paid;});}
   if(event.target.matches('[data-user-role]')){const id=event.target.dataset.id,role=event.target.value;try{await api(`/api/users/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({role})});showToast('Rôle mis à jour; ce compte devra se reconnecter.');await openAccountsModal();}catch(error){showToast(error.message||'Modification impossible.');await openAccountsModal();}return;}
   if(event.target.id==='badgeModelSelect'){await setDefaultBadgeTemplate(event.target.value);return;}
