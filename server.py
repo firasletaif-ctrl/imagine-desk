@@ -107,7 +107,7 @@ def redact_database_url(url: str = "") -> str:
 # Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
 # chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
 BACKUP_FORMAT = "imagine-events-desk-backup"
-BACKUP_VERSION = 6
+BACKUP_VERSION = 7
 BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
 
 # (préfixe du fichier, table, colonnes exportées dans cet ordre)
@@ -117,6 +117,8 @@ BACKUP_TABLES = [
         # Corbeille des congrès (v6) : un congrès supprimé reste restaurable même
         # après un aller-retour de sauvegarde.
         "deleted_at", "deleted_by",
+        # Imagine Self Check-in (v7) : le lien public reste le même après restauration.
+        "self_checkin_token", "self_checkin_enabled",
     ]),
     ("02_users", "users", ["id", "username", "password_salt", "password_hash", "role", "active", "created_at", "updated_at"]),
     ("03_participants", "participants", [
@@ -146,7 +148,7 @@ BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "badge_tem
 # Colonnes nulles dans le schéma : une cellule vide devient NULL à la restauration.
 BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at", "deleted_at"}, "events": {"deleted_at"}, "users": set(),
                    "sync_operations": set(), "event_prices": set(), "badge_templates": set()}
-BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": set(), "sync_operations": set(),
+BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": {"self_checkin_enabled"}, "sync_operations": set(),
                           "event_prices": {"active", "sort_order"}, "badge_templates": {"is_default"}}
 
 BACKUP_INSTRUCTIONS = """SAUVEGARDE COMPLETE - Imagine Events Desk
@@ -176,7 +178,8 @@ CE QUI EST REMPLACE
   paiements et corbeilles : remplaces par le contenu du ZIP.
   La colonne 09 de 01_events.csv (deleted_at) indique les congres dans la
   corbeille ; la colonne 18 de 03_participants.csv, les inscrits.
-  Une date vide = element actif.
+  Une date vide = element actif. Les colonnes 11 et 12 de 01_events.csv
+  conservent le lien public Imagine Self Check-in (jeton et activation).
 - Comptes : remplaces par ceux du ZIP ; votre compte actuel est conserve
   s'il n'y figure pas, pour eviter de perdre l'acces.
 - Sessions : toutes fermees (vous restez connecte sur cet appareil).
@@ -360,6 +363,9 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             "currency": clean_currency(row.get("currency")),
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
             "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
+            # Imagine Self Check-in (absentes des sauvegardes v6 et antérieures).
+            "self_checkin_token": clean_text(row.get("self_checkin_token"), 80),
+            "self_checkin_enabled": 1 if str(row.get("self_checkin_enabled", "")).strip().lower() in ("1", "true", "oui") else 0,
             # Corbeille des congrès (absente des sauvegardes v5 et antérieures).
             "deleted_at": clean_text(row.get("deleted_at"), 64) or None,
             "deleted_by": clean_text(row.get("deleted_by"), 80)
@@ -554,11 +560,12 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             con.execute(f"DELETE FROM {table}")
         for event in clean_events:
             con.execute(
-                "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by,"
+                "self_checkin_token,self_checkin_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (event["id"], event["name"], event["event_date"], event["venue"], event["status"],
                  event["currency"], event["created_at"], event["updated_at"],
-                 event["deleted_at"], event["deleted_by"]),
+                 event["deleted_at"], event["deleted_by"],
+                 event["self_checkin_token"], event["self_checkin_enabled"]),
             )
         for user in clean_users:
             con.execute(
@@ -877,6 +884,8 @@ SCHEMA_STATEMENTS = [
       currency TEXT NOT NULL DEFAULT 'TND',
       deleted_at TEXT,
       deleted_by TEXT NOT NULL DEFAULT '',
+      self_checkin_token TEXT NOT NULL DEFAULT '',
+      self_checkin_enabled INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -992,6 +1001,10 @@ EXPECTED_COLUMNS = {
         # grilles, badges, historique) et peut être restauré tel quel.
         ("deleted_at", "TEXT"),
         ("deleted_by", "TEXT NOT NULL DEFAULT ''"),
+        # Imagine Self Check-in : lien public propre au congrès. Le jeton est
+        # imprévisible (32 caractères) et peut être révoqué à tout moment.
+        ("self_checkin_token", "TEXT NOT NULL DEFAULT ''"),
+        ("self_checkin_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "participants": [
         ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
@@ -1027,6 +1040,7 @@ def init_db() -> None:
         # Colonnes garanties par la migration ci-dessus : les index peuvent être créés.
         con.execute("CREATE INDEX IF NOT EXISTS idx_participants_event_deleted ON participants(event_id, deleted_at)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted_at)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_events_self_token ON events(self_checkin_token)")
         if con.backend == "postgres":
             # Recherche insensible à la casse des noms d’utilisateur (exigence d’unicité).
             con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username))")
@@ -1728,6 +1742,189 @@ def purge_event(event_id: str, user) -> dict:
             "removed": {key: value for key, value in counts.items() if value}}
 
 
+# ═══════════ Imagine Self Check-in ═══════════
+# Lien public propre à chaque congrès : le participant confirme lui-même son
+# arrivée depuis son téléphone ou une borne, sans compte. Le jeton est long et
+# imprévisible ; il peut être révoqué (nouveau jeton) ou désactivé à tout moment.
+# Le service ne révèle jamais la liste des inscrits : seules les correspondances
+# exactes répondent, avec un nom et une heure d’arrivée.
+SELF_CHECKIN_MIN_TOKEN = 20
+SELF_CHECKIN_WINDOW = 60          # secondes
+SELF_CHECKIN_MAX_FAILURES = 40    # échecs tolérés par fenêtre et par jeton
+SELF_CHECKIN_ATTEMPTS: dict[str, list[float]] = {}
+
+
+def new_self_checkin_token() -> str:
+    return secrets.token_hex(16)
+
+
+def self_event_by_token(con, token: str):
+    """Congrès public correspondant au jeton, ou None (jeton invalide, désactivé, supprimé)."""
+    token = clean_text(token, 80)
+    if len(token) < SELF_CHECKIN_MIN_TOKEN:
+        return None
+    return con.execute(
+        "SELECT * FROM events WHERE self_checkin_token=? AND self_checkin_enabled=1 AND deleted_at IS NULL",
+        (token,),
+    ).fetchone()
+
+
+def self_checkin_recent_failures(bucket: str) -> list[float]:
+    now = time.time()
+    return [moment for moment in SELF_CHECKIN_ATTEMPTS.get(bucket, []) if now - moment < SELF_CHECKIN_WINDOW]
+
+
+def self_checkin_throttle(bucket: str) -> None:
+    """Freine uniquement les essais infructueux : une borne qui accueille du monde
+    ne doit jamais ralentir un participant qui saisit son vrai code."""
+    if len(self_checkin_recent_failures(bucket)) >= SELF_CHECKIN_MAX_FAILURES:
+        raise ValueError("Trop de tentatives. Patientez une minute ou adressez-vous à l’accueil.")
+
+
+def self_checkin_record_failure(bucket: str) -> None:
+    now = time.time()
+    failures = self_checkin_recent_failures(bucket)
+    failures.append(now)
+    SELF_CHECKIN_ATTEMPTS[bucket] = failures
+    if len(SELF_CHECKIN_ATTEMPTS) > 500:  # ménage mémoire sur un serveur resté ouvert
+        for key in [k for k, v in SELF_CHECKIN_ATTEMPTS.items() if not v or now - v[-1] > SELF_CHECKIN_WINDOW]:
+            SELF_CHECKIN_ATTEMPTS.pop(key, None)
+
+
+def self_checkin_snapshot(con, event_id: str) -> dict:
+    row = con.execute(
+        "SELECT COUNT(*) AS total, SUM(CASE WHEN checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS arrived "
+        "FROM participants WHERE event_id=? AND deleted_at IS NULL", (event_id,)
+    ).fetchone()
+    return {"total": int(row["total"] or 0), "arrived": int(row["arrived"] or 0)}
+
+
+def self_public_event(event) -> dict:
+    return {
+        "id": event["id"], "name": event["name"], "date": event["event_date"],
+        "venue": event["venue"], "status": event["status"],
+    }
+
+
+def self_public_participant(row) -> dict:
+    return {
+        "name": row["name"], "company": row["company"], "category": row["category"],
+        "checkedIn": bool(row["checked_in_at"]), "checkedInAt": row["checked_in_at"] or "",
+    }
+
+
+def self_checkin_status(token: str, ip: str = "") -> dict:
+    """Informations publiques d'affichage pour la page Imagine Self Check-in."""
+    con = connect()
+    try:
+        event = self_event_by_token(con, token)
+        if not event:
+            raise LookupError("Ce lien de check-in n’est plus actif.")
+        return {"ok": True, "event": self_public_event(event), "counts": self_checkin_snapshot(con, event["id"]),
+                "open": event["status"] != "archived"}
+    finally:
+        con.close()
+
+
+def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
+    """Enregistre l'arrivée d'un participant depuis le lien public (idempotent)."""
+    entry = clean_text(query, 180).strip()
+    if len(entry) < 3:
+        raise ValueError("Saisissez votre code badge ou votre e-mail.")
+    bucket = f"{token}:{ip or 'anonyme'}"
+    self_checkin_throttle(bucket)
+    con = connect()
+    try:
+        event = self_event_by_token(con, token)
+        if not event:
+            raise LookupError("Ce lien de check-in n’est plus actif.")
+        if event["status"] == "archived":
+            raise ValueError("Le check-in en ligne est fermé pour ce congrès.")
+        event_id = event["id"]
+        lowered = entry.lower()
+        row = con.execute(
+            "SELECT * FROM participants WHERE event_id=? AND deleted_at IS NULL "
+            "AND (lower(code)=? OR lower(email)=?) ORDER BY created_at LIMIT 1",
+            (event_id, lowered, lowered),
+        ).fetchone()
+        if row is None and len(entry) >= 4:
+            # Nom complet exact, uniquement s'il est unique dans le congrès.
+            matches = con.execute(
+                "SELECT * FROM participants WHERE event_id=? AND deleted_at IS NULL AND lower(name)=?",
+                (event_id, lowered),
+            ).fetchall()
+            if len(matches) == 1:
+                row = matches[0]
+        if row is None:
+            self_checkin_record_failure(bucket)
+            raise LookupError("Aucun inscrit ne correspond à ce code ou à cet e-mail.")
+        if row["checked_in_at"]:
+            return {"ok": True, "already": True, "participant": self_public_participant(row),
+                    "event": self_public_event(event), "counts": self_checkin_snapshot(con, event_id)}
+        now = utc_now()
+        con.execute(
+            "UPDATE participants SET checked_in_at=?,updated_at=? WHERE id=? AND event_id=?",
+            (now, now, row["id"], event_id),
+        )
+        con.execute(
+            "INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) VALUES(?,?,?,?,?,?)",
+            ("op-" + uuid.uuid4().hex, event_id, row["id"], "self-checkin",
+             json.dumps({"ok": True, "by": "self-checkin"}, ensure_ascii=False, separators=(",", ":")), now),
+        )
+        con.commit()
+        fresh = con.execute("SELECT * FROM participants WHERE id=?", (row["id"],)).fetchone()
+        return {"ok": True, "already": False, "participant": self_public_participant(fresh),
+                "event": self_public_event(event), "counts": self_checkin_snapshot(con, event_id)}
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+def self_checkin_config(event_id: str) -> dict:
+    """Réglage du self check-in d'un congrès (administrateur)."""
+    con = connect()
+    try:
+        event = _event_row(con, event_id)
+        if not event:
+            raise LookupError("Congrès introuvable.")
+        return {"enabled": bool(event["self_checkin_enabled"]),
+                "token": event["self_checkin_token"] or "",
+                "event": self_public_event(event),
+                "counts": self_checkin_snapshot(con, event_id)}
+    finally:
+        con.close()
+
+
+def update_self_checkin(event_id: str, body, user) -> dict:
+    """Active, désactive ou renouvelle le lien public d'un congrès."""
+    con = connect()
+    try:
+        event = _event_row(con, event_id)
+        if not event:
+            raise LookupError("Congrès introuvable.")
+        enabled = bool((body or {}).get("enabled", True))
+        reset = bool((body or {}).get("resetLink"))
+        token = event["self_checkin_token"] or ""
+        if reset or (enabled and not token):
+            token = new_self_checkin_token()
+        now = utc_now()
+        con.execute(
+            "UPDATE events SET self_checkin_token=?,self_checkin_enabled=?,updated_at=? WHERE id=?",
+            (token, 1 if enabled else 0, now, event_id),
+        )
+        con.commit()
+        return {"enabled": enabled, "token": token, "resetLink": reset,
+                "event": self_public_event(event) if event else {},
+                "counts": self_checkin_snapshot(con, event_id)}
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ImagineDesk/0.1"
 
@@ -1773,6 +1970,12 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(result, dict):
             raise ValueError("Le corps doit être un objet JSON.")
         return result
+
+    def client_ip(self) -> str:
+        forwarded = clean_text(self.headers.get("X-Forwarded-For", ""), 120)
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return self.client_address[0] if self.client_address else ""
 
     def current_user(self):
         cookie = SimpleCookie()
@@ -2243,13 +2446,15 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("La sauvegarde contient un événement sans identifiant ou sans nom.")
                 status = clean_text(item.get("status", "active"), 20)
                 con.execute(
-                    "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by,"
+                    "self_checkin_token,self_checkin_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (event_id, name, clean_text(item.get("event_date", ""), 20), clean_text(item.get("venue", ""), 180),
                      status if status in ("active", "archived") else "active", clean_currency(item.get("currency")),
                      clean_text(item.get("created_at", ""), 64) or now, clean_text(item.get("updated_at", ""), 64) or now,
                      clean_text(item.get("deleted_at"), 64) or None,
-                     clean_text(item.get("deleted_by"), 80) if clean_text(item.get("deleted_at"), 64) else ""),
+                     clean_text(item.get("deleted_by"), 80) if clean_text(item.get("deleted_at"), 64) else "",
+                     clean_text(item.get("self_checkin_token"), 80),
+                     1 if str(item.get("self_checkin_enabled", "")).strip().lower() in ("1", "true", "oui") else 0),
                 )
                 event_ids.add(event_id)
             for raw_person in source.execute("SELECT * FROM participants"):
@@ -2338,6 +2543,14 @@ class Handler(BaseHTTPRequestHandler):
                 "database": db_display_path(), "persistent": not db_is_ephemeral(),
             })
             return
+        self_public = re.fullmatch(r"/api/self/([A-Za-z0-9._-]{20,80})", path)
+        if self_public:
+            # Page publique : aucune session requise (jeton propre au congrès).
+            try:
+                self.json(200, self_checkin_status(self_public.group(1), self.client_ip()))
+            except LookupError as exc:
+                self.json(404, {"error": str(exc)})
+            return
         user = None
         if path.startswith("/api/"):
             user = self.require_user()
@@ -2386,6 +2599,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(200, {"events": [event_json(row) for row in rows], "serverTime": utc_now()})
             finally:
                 con.close()
+            return
+        match = re.fullmatch(r"/api/events/([^/]+)/self-checkin", path)
+        if match:
+            if not self.require_admin(user):
+                return
+            try:
+                self.json(200, {"ok": True, **self_checkin_config(match.group(1))})
+            except LookupError as exc:
+                self.json(404, {"error": str(exc)})
             return
         match = re.fullmatch(r"/api/events/([^/]+)/badges", path)
         if match:
@@ -2457,6 +2679,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/" or path == "/index.html":
             self.serve_static("index.html")
             return
+        if re.fullmatch(r"/self/?([A-Za-z0-9._-]{0,80})", path):
+            # Imagine Self Check-in : page autonome, sans compte.
+            self.serve_static("self.html")
+            return
         if path.startswith("/api/"):
             self.json(404, {"error": "Route API introuvable."})
             return
@@ -2491,6 +2717,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.logout()
                 return
 
+            self_public = re.fullmatch(r"/api/self/([A-Za-z0-9._-]{20,80})/checkin", path)
+            if self_public:
+                # Aucune session : le jeton du congrès fait foi (bornes et téléphones).
+                body = self.read_json()
+                try:
+                    self.json(200, perform_self_checkin(self_public.group(1), body.get("query", ""), self.client_ip()))
+                except LookupError as exc:
+                    self.json(404, {"error": str(exc)})
+                return
             user = self.require_user()
             if not user:
                 return
@@ -2518,6 +2753,16 @@ class Handler(BaseHTTPRequestHandler):
             if excel_match:
                 if not self.require_admin(user): return
                 self.import_excel(excel_match.group(1), user)
+                return
+            match = re.fullmatch(r"/api/events/([^/]+)/self-checkin", path)
+            if match:
+                if not self.require_admin(user):
+                    return
+                try:
+                    result = update_self_checkin(match.group(1), self.read_json(), user)
+                    self.json(200, {"ok": True, **result})
+                except LookupError as exc:
+                    self.json(404, {"error": str(exc)})
                 return
             # Corbeille des congrès : aucune donnée n’est envoyée (pas de corps JSON).
             match = re.fullmatch(r"/api/events/([^/]+)/(restore|purge)", path)

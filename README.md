@@ -19,10 +19,56 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 ## Comptes et permissions
 
 - **Administrateur** : crée, archive et supprime les congrès (corbeille), importe les listes, gère les comptes et les mots de passe.
-- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
+- **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées (y compris en **mode rush**), confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
+- **Imagine Self Check-in** : l’**administrateur** ouvre, désactive ou renouvelle le lien public d’un congrès ; les participants, eux, n’ont besoin d’aucun compte.
 - **Corbeille** : un inscrit peut être supprimé par **tous les comptes** ; un congrès, par l’**administrateur**. Dans les deux cas la suppression est **réversible** : seul l’administrateur peut effacer définitivement (voir « Supprimer ou restaurer un inscrit » et « Supprimer ou restaurer un congrès »).
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
 - Les mots de passe ne doivent pas être partagés. Au premier test dans l’aperçu, utilisez un mot de passe provisoire, pas votre mot de passe personnel.
+
+## Mode rush (ouverture des portes)
+
+Quand cent personnes arrivent en dix minutes, ouvrez **Mode rush** (bouton dans l’accueil express ou
+dans l’onglet Participants). L’écran passe en plein écran, sombre et lisible de loin :
+
+- un champ **toujours prêt** : on scanne le badge (lecteur USB/QR) ou on tape un code badge, un e-mail
+  ou un nom, puis **Entrée** ;
+- le nom, la catégorie et l’organisation s’affichent en grand, avec un **signal sonore** (coupable) ;
+- les cas particuliers sont signalés sans bloquer la file : *déjà arrivé* (avec l’heure),
+  *paiement à confirmer*, *plusieurs homonymes*, *introuvable* ;
+- **Annuler la dernière** corrige une erreur de scan ;
+- les compteurs affichent les arrivées de ce poste, les arrivées du congrès et le nombre d’actions
+  encore à envoyer.
+
+Le check-in est **optimiste** : l’écran répond immédiatement, l’envoi au serveur se fait **par lots de
+50** toutes les 1,2 seconde. Une rafale de 100 arrivées ne bloque jamais la file et, si le réseau
+tombe, rien n’est perdu : la file locale se vide au retour de la connexion. `Échap` referme le mode
+rush et force un dernier envoi.
+
+## Imagine Self Check-in (arrivée en autonomie)
+
+Chaque congrès peut ouvrir un **lien public** où les participants confirment eux-mêmes leur arrivée
+depuis leur téléphone ou une borne, sans compte et sans installation.
+
+1. Onglet **Vue générale** (ou paramètres du congrès) → **Self check-in**.
+2. **Activer le self check-in** : un lien propre au congrès et son **QR code** apparaissent.
+3. Affichez le QR à l’entrée ou imprimez-le sur les invitations.
+4. Le participant scanne, saisit son **code badge**, son **e-mail** ou son nom complet exact ; la page
+   confirme son arrivée avec l’heure.
+5. L’arrivée apparaît **en direct** dans le desk, y compris en mode rush (rafraîchissement automatique).
+
+Points à connaître :
+
+- **Aucune liste n’est exposée** : seules les correspondances exactes répondent, et la page ne renvoie
+  qu’un nom, une organisation et une heure d’arrivée. Le compteur global (arrivées / inscrits) reste
+  agrégé.
+- Les **échecs sont limités** (40 par minute et par congrès) pour freiner les essais en aveugle ; une
+  personne qui saisit son vrai code n’est jamais ralentie.
+- Un participant déjà enregistré revoit son heure d’arrivée : le self check-in est **idempotent**.
+- **Renouveler le lien** invalide immédiatement l’ancien (lien partagé par erreur) ; **désactiver**
+  ferme la page publique. Un congrès archivé ou dans la corbeille ferme aussi le self check-in.
+- Chaque arrivée en autonomie est tracée (`self-checkin` dans l’historique de synchronisation) et la
+  sauvegarde conserve le lien (`self_checkin_token` / `self_checkin_enabled`, colonnes 11 et 12 de
+  `01_events.csv`).
 
 ## Supprimer ou restaurer un congrès (corbeille)
 
@@ -40,9 +86,10 @@ modèles de badge.
 - Tant qu’un congrès est dans la corbeille, ses inscrits, sa grille tarifaire et ses badges refusent
   toute écriture (le serveur répond « Congrès introuvable ») : aucune donnée ne peut s’y ajouter
   par erreur pendant qu’il attend une restauration.
-- La sauvegarde ZIP (version 6) conserve la corbeille des congrès (`deleted_at` / `deleted_by`,
-  colonnes 9 et 10 de `01_events.csv`). Les sauvegardes antérieures restent valides : leurs congrès
-  sont simplement tous considérés comme actifs.
+- La sauvegarde ZIP (version 7) conserve la corbeille des congrès (`deleted_at` / `deleted_by`,
+  colonnes 9 et 10 de `01_events.csv`) et les liens du self check-in (colonnes 11 et 12). Les
+  sauvegardes antérieures restent valides : leurs congrès sont simplement tous considérés comme
+  actifs, sans self check-in.
 
 ## Supprimer ou restaurer un inscrit (corbeille)
 
@@ -258,7 +305,7 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
 - `manifest.json` (format, version, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) et `self_checkin_token` / `self_checkin_enabled` les liens du self check-in ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.
