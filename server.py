@@ -2679,8 +2679,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/" or path == "/index.html":
             self.serve_static("index.html")
             return
-        if re.fullmatch(r"/self/?([A-Za-z0-9._-]{0,80})", path):
-            # Imagine Self Check-in : page autonome, sans compte.
+        # Imagine Self Check-in : page autonome, sans compte. Le motif exige
+        # « /self » ou « /self/<jeton> » afin de ne jamais intercepter
+        # /self.css ou /self.js (fichiers statiques de cette page).
+        if re.fullmatch(r"/self(?:/([A-Za-z0-9._-]{0,80}))?", path):
             self.serve_static("self.html")
             return
         if path.startswith("/api/"):
