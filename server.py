@@ -107,12 +107,17 @@ def redact_database_url(url: str = "") -> str:
 # Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
 # chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
 BACKUP_FORMAT = "imagine-events-desk-backup"
-BACKUP_VERSION = 5
+BACKUP_VERSION = 6
 BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
 
 # (préfixe du fichier, table, colonnes exportées dans cet ordre)
 BACKUP_TABLES = [
-    ("01_events", "events", ["id", "name", "event_date", "venue", "status", "currency", "created_at", "updated_at"]),
+    ("01_events", "events", [
+        "id", "name", "event_date", "venue", "status", "currency", "created_at", "updated_at",
+        # Corbeille des congrès (v6) : un congrès supprimé reste restaurable même
+        # après un aller-retour de sauvegarde.
+        "deleted_at", "deleted_by",
+    ]),
     ("02_users", "users", ["id", "username", "password_salt", "password_hash", "role", "active", "created_at", "updated_at"]),
     ("03_participants", "participants", [
         "id", "event_id", "name", "email", "company", "category", "code", "checked_in_at",
@@ -139,7 +144,7 @@ BACKUP_INSERT_ORDER = ["events", "users", "event_prices", "badge_templates", "pa
 BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "badge_templates", "event_prices", "users", "events"]
 
 # Colonnes nulles dans le schéma : une cellule vide devient NULL à la restauration.
-BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at", "deleted_at"}, "events": set(), "users": set(),
+BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at", "deleted_at"}, "events": {"deleted_at"}, "users": set(),
                    "sync_operations": set(), "event_prices": set(), "badge_templates": set()}
 BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": set(), "sync_operations": set(),
                           "event_prices": {"active", "sort_order"}, "badge_templates": {"is_default"}}
@@ -149,8 +154,8 @@ BACKUP_INSTRUCTIONS = """SAUVEGARDE COMPLETE - Imagine Events Desk
 
 Ce fichier ZIP contient TOUT votre site : congres, grilles tarifaires,
 modeles de badge (fond et placements), inscrits, arrivees, paiements,
-corbeille (inscrits supprimes, restaurables) et comptes de l'equipe
-(mots de passe haches, jamais en clair).
+corbeille (congres et inscrits supprimes, restaurables) et comptes de
+l'equipe (mots de passe haches, jamais en clair).
 Les sessions ouvertes ne sont pas incluses.
 
 POUR RESTAURER (rotation mensuelle de la base Render gratuite)
@@ -168,9 +173,10 @@ POUR RESTAURER (rotation mensuelle de la base Render gratuite)
 CE QUI EST REMPLACE
 -------------------
 - Congres, grilles tarifaires, modeles de badge, inscrits, arrivees,
-  paiements et corbeille : remplaces par le contenu du ZIP.
-  La colonne deleted_at (colonne 18 de 03_participants.csv) indique les
-  inscrits dans la corbeille ; une date vide = inscrit actif.
+  paiements et corbeilles : remplaces par le contenu du ZIP.
+  La colonne 09 de 01_events.csv (deleted_at) indique les congres dans la
+  corbeille ; la colonne 18 de 03_participants.csv, les inscrits.
+  Une date vide = element actif.
 - Comptes : remplaces par ceux du ZIP ; votre compte actuel est conserve
   s'il n'y figure pas, pour eviter de perdre l'acces.
 - Sessions : toutes fermees (vous restez connecte sur cet appareil).
@@ -354,6 +360,10 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             "currency": clean_currency(row.get("currency")),
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
             "updated_at": clean_text(row.get("updated_at"), 64) or utc_now(),
+            # Corbeille des congrès (absente des sauvegardes v5 et antérieures).
+            "deleted_at": clean_text(row.get("deleted_at"), 64) or None,
+            "deleted_by": clean_text(row.get("deleted_by"), 80)
+            if clean_text(row.get("deleted_at"), 64) else "",
         })
         event_ids.add(event_id)
 
@@ -544,9 +554,11 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             con.execute(f"DELETE FROM {table}")
         for event in clean_events:
             con.execute(
-                "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (event["id"], event["name"], event["event_date"], event["venue"], event["status"],
-                 event["currency"], event["created_at"], event["updated_at"]),
+                 event["currency"], event["created_at"], event["updated_at"],
+                 event["deleted_at"], event["deleted_by"]),
             )
         for user in clean_users:
             con.execute(
@@ -863,6 +875,8 @@ SCHEMA_STATEMENTS = [
       venue TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'active',
       currency TEXT NOT NULL DEFAULT 'TND',
+      deleted_at TEXT,
+      deleted_by TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -972,7 +986,13 @@ SCHEMA_STATEMENTS = [
 
 # Colonnes ajoutées après la première version de l’application (migration douce).
 EXPECTED_COLUMNS = {
-    "events": [("currency", "TEXT NOT NULL DEFAULT 'TND'")],
+    "events": [
+        ("currency", "TEXT NOT NULL DEFAULT 'TND'"),
+        # Corbeille des congrès : un congrès supprimé reste complet (inscrits,
+        # grilles, badges, historique) et peut être restauré tel quel.
+        ("deleted_at", "TEXT"),
+        ("deleted_by", "TEXT NOT NULL DEFAULT ''"),
+    ],
     "participants": [
         ("payment_status", "TEXT NOT NULL DEFAULT 'unpaid'"),
         ("payment_amount", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
@@ -1006,6 +1026,7 @@ def init_db() -> None:
                 ensure_column(con, table, column, definition)
         # Colonnes garanties par la migration ci-dessus : les index peuvent être créés.
         con.execute("CREATE INDEX IF NOT EXISTS idx_participants_event_deleted ON participants(event_id, deleted_at)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted_at)")
         if con.backend == "postgres":
             # Recherche insensible à la casse des noms d’utilisateur (exigence d’unicité).
             con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username))")
@@ -1251,11 +1272,23 @@ def badge_templates(event_id: str) -> list[dict]:
         con.close()
 
 
+def event_exists(con, event_id: str) -> bool:
+    """Vrai seulement pour un congrès présent et hors corbeille.
+
+    Un congrès supprimé se comporte comme un congrès inexistant partout
+    ailleurs (inscrits, grille tarifaire, badges, synchronisation) : aucune
+    écriture ne peut donc l’alimenter pendant qu’il attend une restauration.
+    """
+    return con.execute(
+        "SELECT 1 FROM events WHERE id=? AND deleted_at IS NULL", (event_id,)
+    ).fetchone() is not None
+
+
 def replace_badge_templates(event_id: str, raw) -> list[dict]:
     templates = normalize_badge_templates(raw)
     con = connect()
     try:
-        if not con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone():
+        if not event_exists(con, event_id):
             raise ValueError("Événement introuvable.")
         now = utc_now()
         con.execute("BEGIN IMMEDIATE")
@@ -1338,7 +1371,7 @@ def replace_event_prices(event_id: str, raw) -> list[dict]:
     prices = normalize_prices(raw)
     con = connect()
     try:
-        if not con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone():
+        if not event_exists(con, event_id):
             raise ValueError("Événement introuvable.")
         now = utc_now()
         con.execute("BEGIN IMMEDIATE")
@@ -1448,6 +1481,9 @@ def event_json(row: sqlite3.Row) -> dict:
         "currency": (row["currency"] if "currency" in keys else DEFAULT_CURRENCY) or DEFAULT_CURRENCY,
         "paid": int(row["paid"] or 0) if "paid" in keys else 0,
         "collected": round(float(row["collected"] or 0), 3) if "collected" in keys else 0.0,
+        # Corbeille : renseignés seulement pour un congrès supprimé.
+        "deletedAt": (row["deleted_at"] if "deleted_at" in keys else "") or "",
+        "deletedBy": (row["deleted_by"] if "deleted_by" in keys else "") or "",
     }
 
 
@@ -1478,7 +1514,8 @@ def _clean_ids(raw) -> list[str]:
 
 
 def _event_row(con, event_id):
-    return con.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+    """Congrès actif (hors corbeille) ; None s’il n’existe pas ou s’il est supprimé."""
+    return con.execute("SELECT * FROM events WHERE id=? AND deleted_at IS NULL", (event_id,)).fetchone()
 
 
 def _log_participant_action(con, event_id: str, action: str, ids: list[str], user) -> None:
@@ -1598,6 +1635,97 @@ def purge_participants(event_id: str, ids: list[str] | None, user, purge_all: bo
     finally:
         con.close()
     return {"purged": len(purged), "ids": purged}
+
+
+# ═══════════ Corbeille des congrès ═══════════
+# Supprimer un congrès ne détruit rien : il disparaît de la liste, du sélecteur
+# et de tous les écrans, mais ses inscrits, sa grille tarifaire, ses badges et
+# son historique restent intacts. Il peut être restauré tel quel, ou effacé
+# définitivement (opération alors irréversible, réservée à l’administrateur).
+
+def event_participants_count(con, event_id: str) -> int:
+    row = con.execute(
+        "SELECT COUNT(*) AS n FROM participants WHERE event_id=? AND deleted_at IS NULL", (event_id,)
+    ).fetchone()
+    return int(row["n"] or 0)
+
+
+def trash_event(event_id: str, user) -> dict:
+    """Déplace un congrès vers la corbeille (réversible)."""
+    con = connect()
+    try:
+        row = con.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        if not row:
+            raise LookupError("Congrès introuvable.")
+        name = row["name"]
+        if row["deleted_at"]:
+            return {"moved": 0, "already": 1, "name": name, "participants": event_participants_count(con, event_id)}
+        now = utc_now()
+        actor = clean_text(user["username"], 80) if user else ""
+        total = event_participants_count(con, event_id)
+        con.execute("BEGIN IMMEDIATE")
+        con.execute(
+            "UPDATE events SET deleted_at=?,deleted_by=?,updated_at=? WHERE id=?", (now, actor, now, event_id)
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return {"moved": 1, "already": 0, "name": name, "participants": total, "deletedAt": now}
+
+
+def restore_event(event_id: str, user) -> dict:
+    """Remet un congrès supprimé dans la liste, avec toutes ses données."""
+    con = connect()
+    try:
+        row = con.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        if not row:
+            raise LookupError("Congrès introuvable.")
+        if not row["deleted_at"]:
+            return {"restored": 0, "name": row["name"], "already": 1,
+                    "participants": event_participants_count(con, event_id)}
+        name = row["name"]
+        now = utc_now()
+        con.execute("BEGIN IMMEDIATE")
+        con.execute(
+            "UPDATE events SET deleted_at=NULL,deleted_by='',updated_at=? WHERE id=?", (now, event_id)
+        )
+        con.commit()
+        total = event_participants_count(con, event_id)
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return {"restored": 1, "name": name, "participants": total, "already": 0}
+
+
+def purge_event(event_id: str, user) -> dict:
+    """Efface définitivement un congrès de la corbeille et tout son contenu."""
+    con = connect()
+    try:
+        row = con.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        if not row:
+            raise LookupError("Congrès introuvable.")
+        if not row["deleted_at"]:
+            raise ValueError("Ce congrès n’est pas dans la corbeille : mettez-le d’abord à la corbeille.")
+        name = row["name"]
+        con.execute("BEGIN IMMEDIATE")
+        counts = {}
+        for table in ("sync_operations", "participants", "event_prices", "badge_templates"):
+            result = con.execute(f"DELETE FROM {table} WHERE event_id=?", (event_id,))
+            counts[table] = max(0, int(result.rowcount or 0))
+        con.execute("DELETE FROM events WHERE id=?", (event_id,))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return {"purged": 1, "name": name, "participants": counts.get("participants", 0),
+            "removed": {key: value for key, value in counts.items() if value}}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2115,10 +2243,13 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("La sauvegarde contient un événement sans identifiant ou sans nom.")
                 status = clean_text(item.get("status", "active"), 20)
                 con.execute(
-                    "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    "INSERT INTO events(id,name,event_date,venue,status,currency,created_at,updated_at,deleted_at,deleted_by) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (event_id, name, clean_text(item.get("event_date", ""), 20), clean_text(item.get("venue", ""), 180),
                      status if status in ("active", "archived") else "active", clean_currency(item.get("currency")),
-                     clean_text(item.get("created_at", ""), 64) or now, clean_text(item.get("updated_at", ""), 64) or now),
+                     clean_text(item.get("created_at", ""), 64) or now, clean_text(item.get("updated_at", ""), 64) or now,
+                     clean_text(item.get("deleted_at"), 64) or None,
+                     clean_text(item.get("deleted_by"), 80) if clean_text(item.get("deleted_at"), 64) else ""),
                 )
                 event_ids.add(event_id)
             for raw_person in source.execute("SELECT * FROM participants"):
@@ -2233,14 +2364,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.export_database_backup()
                 return
         if path == "/api/events":
+            # ?trash=1 : contenu de la corbeille des congrès (administrateur).
+            want_trash = parse_qs(parsed.query).get("trash", [""])[0] in ("1", "true", "oui")
             con = connect()
             try:
-                rows = con.execute("""
+                if want_trash:
+                    if not self.require_admin(user):
+                        return
+                    condition = "e.deleted_at IS NOT NULL"
+                else:
+                    condition = "e.deleted_at IS NULL"
+                rows = con.execute(f"""
                   SELECT e.*, COUNT(p.id) AS total,
                     SUM(CASE WHEN p.checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS arrived,
                     SUM(CASE WHEN p.payment_status='paid' THEN 1 ELSE 0 END) AS paid,
                     SUM(CASE WHEN p.payment_status='paid' THEN p.payment_amount ELSE 0 END) AS collected
                   FROM events e LEFT JOIN participants p ON p.event_id=e.id AND p.deleted_at IS NULL
+                  WHERE {condition}
                   GROUP BY e.id ORDER BY e.created_at DESC
                 """).fetchall()
                 self.json(200, {"events": [event_json(row) for row in rows], "serverTime": utc_now()})
@@ -2252,7 +2392,7 @@ class Handler(BaseHTTPRequestHandler):
             event_id = match.group(1)
             con = connect()
             try:
-                exists = con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone()
+                exists = event_exists(con, event_id)
             finally:
                 con.close()
             if not exists:
@@ -2265,7 +2405,7 @@ class Handler(BaseHTTPRequestHandler):
             event_id = match.group(1)
             con = connect()
             try:
-                exists = con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone()
+                exists = event_exists(con, event_id)
             finally:
                 con.close()
             if not exists:
@@ -2280,7 +2420,7 @@ class Handler(BaseHTTPRequestHandler):
             since = query.get("since", [""])[0]
             con = connect()
             try:
-                exists = con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone()
+                exists = event_exists(con, event_id)
                 if not exists:
                     self.json(404, {"error": "Événement introuvable."})
                     return
@@ -2379,6 +2519,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.require_admin(user): return
                 self.import_excel(excel_match.group(1), user)
                 return
+            # Corbeille des congrès : aucune donnée n’est envoyée (pas de corps JSON).
+            match = re.fullmatch(r"/api/events/([^/]+)/(restore|purge)", path)
+            if match:
+                if not self.require_admin(user):
+                    return
+                self.manage_event(match.group(1), match.group(2), user)
+                return
             body = self.read_json()
             if path == "/api/events":
                 if not self.require_admin(user): return
@@ -2438,6 +2585,27 @@ class Handler(BaseHTTPRequestHandler):
             print("PUT error:", repr(exc), flush=True)
             self.json(500, {"error": "Erreur interne du serveur."})
 
+    def manage_event(self, event_id, action, user):
+        """Corbeille des congrès : restaurer ou effacer définitivement (administrateur)."""
+        try:
+            if action == "restore":
+                result = restore_event(event_id, user)
+                self.json(200, {"ok": True, "eventId": event_id, "restored": result["restored"],
+                                "already": result.get("already", 0), "name": result["name"],
+                                "participants": result.get("participants", 0), "serverTime": utc_now()})
+                return
+            result = purge_event(event_id, user)
+            self.json(200, {"ok": True, "eventId": event_id, "purged": result["purged"],
+                            "name": result["name"], "participants": result["participants"],
+                            "serverTime": utc_now()})
+        except LookupError as exc:
+            self.json(404, {"error": str(exc)})
+        except ValueError as exc:
+            self.json(400, {"error": str(exc)})
+        except Exception as exc:
+            print("manage_event error:", repr(exc), flush=True)
+            self.json(500, {"error": "Erreur interne du serveur."})
+
     def manage_participants(self, event_id, action, body, user):
         """Corbeille : supprimer (tout le monde), restaurer (tout le monde),
         effacer définitivement (administrateur)."""
@@ -2494,7 +2662,7 @@ class Handler(BaseHTTPRequestHandler):
         """Enregistre les modèles de badge d’un congrès (ouvert à tous les comptes)."""
         con = connect()
         try:
-            event = con.execute("SELECT status FROM events WHERE id=?", (event_id,)).fetchone()
+            event = con.execute("SELECT status FROM events WHERE id=? AND deleted_at IS NULL", (event_id,)).fetchone()
         finally:
             con.close()
         if not event:
@@ -2509,7 +2677,7 @@ class Handler(BaseHTTPRequestHandler):
         """Enregistre la grille tarifaire d’un congrès (ouvert à tous les comptes)."""
         con = connect()
         try:
-            event = con.execute("SELECT status FROM events WHERE id=?", (event_id,)).fetchone()
+            event = con.execute("SELECT status FROM events WHERE id=? AND deleted_at IS NULL", (event_id,)).fetchone()
         finally:
             con.close()
         if not event:
@@ -2574,7 +2742,7 @@ class Handler(BaseHTTPRequestHandler):
     def update_event(self, event_id, body):
         con = connect()
         try:
-            row = con.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+            row = con.execute("SELECT * FROM events WHERE id=? AND deleted_at IS NULL", (event_id,)).fetchone()
             if not row:
                 self.json(404, {"error":"Événement introuvable."})
                 return
@@ -2597,7 +2765,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Le nom du participant est obligatoire.")
         con = connect()
         try:
-            if not con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone():
+            if not event_exists(con, event_id):
                 self.json(404, {"error":"Événement introuvable."})
                 return
             person_id = clean_text(body.get("id"), 100) or "p-" + uuid.uuid4().hex
@@ -2763,7 +2931,7 @@ class Handler(BaseHTTPRequestHandler):
         added = updated = restored = 0
         changed_ids = []
         try:
-            if not con.execute("SELECT 1 FROM events WHERE id=?", (event_id,)).fetchone():
+            if not event_exists(con, event_id):
                 self.json(404, {"error":"Événement introuvable."})
                 return
             con.execute("BEGIN IMMEDIATE")
@@ -2866,7 +3034,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(operations)>500: raise ValueError("Synchronisez au maximum 500 actions à la fois.")
         con=connect()
         try:
-            if not con.execute("SELECT 1 FROM events WHERE id=?",(event_id,)).fetchone():
+            if not event_exists(con, event_id):
                 self.json(404,{"error":"Événement introuvable."}); return
             con.execute("BEGIN IMMEDIATE")
             results=[]; changed_ids=[]
@@ -2956,6 +3124,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             user = self.require_user()
             if not user:
+                return
+            match = re.fullmatch(r"/api/events/([^/]+)", path)
+            if match:
+                if not self.require_admin(user):
+                    return
+                result = trash_event(match.group(1), user)
+                self.json(200, {"ok": True, "eventId": match.group(1), "moved": result["moved"],
+                                "already": result["already"], "name": result["name"],
+                                "participants": result.get("participants", 0), "serverTime": utc_now()})
                 return
             match = re.fullmatch(r"/api/events/([^/]+)/participants/([^/]+)", path)
             if match:
