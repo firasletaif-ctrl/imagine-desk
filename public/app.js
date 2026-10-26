@@ -5,7 +5,7 @@ const STORAGE_KEY = 'imagine-events-desk-platform-v1';
 // vérifier qu'un navigateur n'exécute pas un ancien fichier mis en cache.
 const APP_BUILD = '2026-10-26 · corbeille-congres';
 const categoryNames = { participant:'Participant', vip:'VIP', speaker:'Intervenant', press:'Presse', team:'Équipe' };
-const defaultStore = { events:[], trashEvents:[], activeEventId:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, trashCountByEvent:{}, trashByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
+const defaultStore = { events:[], trashEvents:[], activeEventId:'', sessionToken:'', peopleByEvent:{}, cursorByEvent:{}, queueByEvent:{}, pricesByEvent:{}, badgeTemplatesByEvent:{}, trashCountByEvent:{}, trashByEvent:{}, deviceId:'', cachedUser:null, authCachedAt:0, logoutPending:false };
 function loadStore(){
   try { const saved=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null'); if(saved&&typeof saved==='object') return {...defaultStore,...saved,events:Array.isArray(saved.events)?saved.events:[],peopleByEvent:saved.peopleByEvent||{},cursorByEvent:saved.cursorByEvent||{},queueByEvent:saved.queueByEvent||{},pricesByEvent:saved.pricesByEvent||{},deviceId:saved.deviceId||''}; }
   catch(e){ console.warn('Cache locale non disponible.',e); }
@@ -104,13 +104,21 @@ function updateStatus(){
   el.innerHTML=`<i></i><span>${esc(text)}</span>`;
   const footer=$('#footerSync');if(footer)footer.textContent=n?`${n} action${n===1?'':'s'} en attente de synchronisation.`:'Les données restent séparées par congrès.';
 }
+function authHeaders(extra={}){
+  // Le jeton en en-tête fonctionne même quand le cookie de session est refusé
+  // (page affichée dans une iframe d’un autre domaine, cookies tiers bloqués).
+  const headers={...(extra||{})};
+  if(store.sessionToken&&!headers['Authorization'])headers['Authorization']=`Bearer ${store.sessionToken}`;
+  return headers;
+}
+function clearSessionToken(){store.sessionToken='';try{saveStore();}catch(e){}}
 async function api(path,options={}){
-  const headers={...(options.headers||{})};
+  const headers=authHeaders(options.headers);
   if(options.body&&!headers['Content-Type'])headers['Content-Type']='application/json';
   let response;
   try{response=await fetch(path,{...options,headers,cache:'no-store',credentials:'same-origin'});}catch(error){apiOnline=false;updateStatus();throw new Error('Serveur injoignable. Les actions de check-in restent enregistrées sur cet appareil.');}
   let data={};try{data=await response.json();}catch(e){}
-  if(response.status===401&&!String(path).startsWith('/api/auth/')){apiOnline=false;authUser=null;store.cachedUser=null;store.authCachedAt=0;saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
+  if(response.status===401&&!String(path).startsWith('/api/auth/')){apiOnline=false;authUser=null;store.cachedUser=null;store.authCachedAt=0;clearSessionToken();saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
   if(!response.ok){const error=new Error(data.error||`Erreur serveur (${response.status}).`);error.status=response.status;throw error;}
   apiOnline=true;updateStatus();return data;
 }
@@ -551,7 +559,7 @@ async function logout(){
   const queued=pendingTotal();
   if(queued&&!confirm(`${queued} action(s) sont encore en attente. Elles resteront sur cet appareil et seront synchronisées après une prochaine connexion. Se déconnecter ?`))return;
   let serverLogout=false;try{await api('/api/auth/logout',{method:'POST',body:JSON.stringify({})});serverLogout=true;}catch(e){}
-  authUser=null;store.cachedUser=null;store.authCachedAt=0;store.logoutPending=!serverLogout;if(!queued){store.peopleByEvent={};store.cursorByEvent={};}saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+  authUser=null;store.cachedUser=null;store.authCachedAt=0;store.sessionToken='';store.logoutPending=!serverLogout;if(!queued){store.peopleByEvent={};store.cursorByEvent={};}saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
   renderAuthScreen('login',serverLogout?'Vous êtes déconnecté. Les actions hors ligne restent sauvegardées sur cet appareil.':'Déconnexion locale effectuée. La session serveur sera fermée dès le retour de la connexion.');
 }
 function downloadFile(filename,content,type='text/csv;charset=utf-8'){const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1200);}
@@ -569,9 +577,9 @@ function parseAmount(v){const text=String(v??'').replace(/\s/g,'').replace(',','
 function mapCSV(text){const rows=parseCSV(text);if(rows.length<2)throw new Error('Le CSV est vide ou ne contient aucune ligne de participant.');const h=rows[0].map(x=>x.trim());const full=findColumn(h,['nom complet','full name','name','participant','nom et prenom','participant name']);const first=findColumn(h,['prenom','first name','firstname','given name']);const last=findColumn(h,['nom','surname','lastname','last name','family name']);const email=findColumn(h,['email','e mail','courriel','adresse email','mail']);const company=findColumn(h,['organisation','organization','entreprise','company','societe','institution','structure']);const category=findColumn(h,['categorie','category','type','profil','acces','access']);const code=findColumn(h,['code badge','code','reference','ref','badge','ticket','identifiant']);const status=findColumn(h,['statut','status','presence','arrivee','check in','checkin','checked in']);const paymentStatus=findColumn(h,['paiement','payment','statut paiement','statut du paiement','reglement','regle','paye','payment status','paid']);const paymentAmount=findColumn(h,['montant','montant paye','montant du paiement','amount','prix','tarif','montant tnd']);const paymentMethod=findColumn(h,['moyen de paiement','mode de paiement','moyen','payment method','mode de reglement']);if(full<0&&first<0&&last<0)throw new Error('Colonne de nom introuvable. Utilisez « Nom complet » ou « Prénom » et « Nom ».');const output=[];rows.slice(1).forEach((r,i)=>{const val=n=>n>=0?String(r[n]||'').trim():'';const name=val(full)||[val(first),val(last)].filter(Boolean).join(' ');if(!name)return;const person={id:makeId('p'),name,email:val(email),company:val(company),category:parseCategory(val(category)),code:val(code),checkedIn:status>=0?parseCheckin(val(status)):false};const payStatus=paymentStatus>=0?parsePaymentStatus(val(paymentStatus)):'';const payAmount=paymentAmount>=0?parseAmount(val(paymentAmount)):0;if(payStatus)person.paymentStatus=payStatus;if(payAmount>0){person.paymentAmount=payAmount;if(!person.paymentStatus)person.paymentStatus='paid';}const payMethod=paymentMethod>=0?val(paymentMethod):'';if(payMethod&&person.paymentStatus==='paid')person.paymentMethod=payMethod;output.push(person);});if(!output.length)throw new Error('Aucun participant avec un nom valide n’a été trouvé.');return output;}
 async function apiUpload(path,formData){
   let response;
-  try{response=await fetch(path,{method:'POST',body:formData,cache:'no-store',credentials:'same-origin'});}catch(error){apiOnline=false;updateStatus();throw new Error('Serveur injoignable. Vérifiez la connexion puis réessayez.');}
+  try{response=await fetch(path,{method:'POST',body:formData,headers:authHeaders(),cache:'no-store',credentials:'same-origin'});}catch(error){apiOnline=false;updateStatus();throw new Error('Serveur injoignable. Vérifiez la connexion puis réessayez.');}
   let data={};try{data=await response.json();}catch(e){}
-  if(response.status===401){authUser=null;store.cachedUser=null;store.authCachedAt=0;saveStore();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
+  if(response.status===401){authUser=null;store.cachedUser=null;store.authCachedAt=0;clearSessionToken();if(pollTimer){clearInterval(pollTimer);pollTimer=null;}renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');}
   if(!response.ok)throw new Error(data.error||`Erreur serveur (${response.status}).`);
   apiOnline=true;updateStatus();return data;
 }
@@ -579,7 +587,7 @@ async function exportDatabaseBackup(){
   if(authUser?.role!=='admin'){showToast('Seul un administrateur peut exporter la base.');return;}
   if(!navigator.onLine){showToast('Connectez-vous au serveur pour exporter la base.');return;}
   try{
-    const response=await fetch('/api/admin/backup/export',{method:'GET',cache:'no-store',credentials:'same-origin'});
+    const response=await fetch('/api/admin/backup/export',{method:'GET',headers:authHeaders(),cache:'no-store',credentials:'same-origin'});
     if(response.status===401){renderAuthScreen('login','Votre session a expiré. Reconnectez-vous.');return;}
     if(!response.ok){let data={};try{data=await response.json();}catch(e){}throw new Error(data.error||`Erreur serveur (${response.status}).`);}
     const blob=await response.blob();
@@ -1731,10 +1739,10 @@ document.addEventListener('submit',async event=>{
   if(form.id==='setupForm'){
     event.preventDefault();const fd=new FormData(form),username=String(fd.get('username')||'').trim(),password=String(fd.get('password')||''),confirm=String(fd.get('passwordConfirm')||''),setupToken=String(fd.get('setupToken')||'');
     if(password!==confirm){renderAuthScreen('setup','Les deux mots de passe ne correspondent pas.');return;}
-    try{const data=await api('/api/auth/setup',{method:'POST',body:JSON.stringify({username,password,setupToken})});store.logoutPending=false;store.cachedUser=data.user;store.authCachedAt=Date.now();await enterWorkspace(data.user,false);showToast('Compte administrateur créé.');}catch(error){renderAuthScreen('setup',error.message||'Création du compte impossible.');}return;
+    try{const data=await api('/api/auth/setup',{method:'POST',body:JSON.stringify({username,password,setupToken})});store.logoutPending=false;store.sessionToken=data.token||store.sessionToken||'';store.cachedUser=data.user;store.authCachedAt=Date.now();saveStore();await enterWorkspace(data.user,false);showToast('Compte administrateur créé.');}catch(error){renderAuthScreen('setup',error.message||'Création du compte impossible.');}return;
   }
   if(form.id==='loginForm'){
-    event.preventDefault();const fd=new FormData(form);try{if(store.logoutPending){await api('/api/auth/logout',{method:'POST',body:JSON.stringify({})});store.logoutPending=false;saveStore();}const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:String(fd.get('username')||'').trim(),password:String(fd.get('password')||'')})});await enterWorkspace(data.user,false);showToast('Connexion réussie.');}catch(error){renderAuthScreen('login',error.message||'Connexion impossible.');}return;
+    event.preventDefault();const fd=new FormData(form);try{if(store.logoutPending){await api('/api/auth/logout',{method:'POST',body:JSON.stringify({})});store.logoutPending=false;saveStore();}const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:String(fd.get('username')||'').trim(),password:String(fd.get('password')||'')})});store.sessionToken=data.token||'';saveStore();await enterWorkspace(data.user,false);showToast('Connexion réussie.');}catch(error){renderAuthScreen('login',error.message||'Connexion impossible.');}return;
   }
   if(form.id==='createAccountForm'){
     event.preventDefault();const fd=new FormData(form),password=String(fd.get('password')||''),confirm=String(fd.get('passwordConfirm')||'');if(password!==confirm){showToast('Les deux mots de passe ne correspondent pas.');return;}

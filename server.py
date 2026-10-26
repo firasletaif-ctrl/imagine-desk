@@ -1787,16 +1787,32 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Le corps doit être un objet JSON.")
         return result
 
-    def current_user(self):
+    def request_token(self) -> str:
+        """Jeton de session : cookie (même origine) ou en-tête Bearer.
+
+        L’en-tête est indispensable quand la page est affichée dans une iframe
+        d’un autre domaine (aperçu, portail) : le navigateur n’y envoie pas le
+        cookie de session, ce qui provoquait un retour immédiat à l’écran de
+        connexion (« votre session a expiré »)."""
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
         except Exception:
+            cookie = None
+        if cookie is not None:
+            morsel = cookie.get(SESSION_COOKIE)
+            if morsel and morsel.value:
+                return morsel.value
+        header = self.headers.get("Authorization", "") or ""
+        if header.lower().startswith("bearer "):
+            return header[7:].strip()
+        return ""
+
+    def current_user(self):
+        token = self.request_token()
+        if not token:
             return None
-        morsel = cookie.get(SESSION_COOKIE)
-        if not morsel or not morsel.value:
-            return None
-        token_hash = hashlib.sha256(morsel.value.encode("utf-8")).hexdigest()
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         con = connect()
         try:
             row = con.execute("""SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
@@ -1819,13 +1835,21 @@ class Handler(BaseHTTPRequestHandler):
         return token
 
     def auth_cookie(self, token=None, clear=False):
-        if clear:
-            value = f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
-        else:
-            value = f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECONDS}"
+        """Cookie de session.
+
+        En HTTPS (aperçu, portail, iframe d’un autre domaine) le cookie doit être
+        `SameSite=None; Secure` pour être transmis ; en HTTP simple (postes du
+        desk sur le réseau local) on garde `SameSite=Lax`. Le jeton renvoyé dans
+        la réponse sert de secours quand le navigateur bloque ces cookies."""
         forwarded = self.headers.get("X-Forwarded-Proto", "").lower()
         origin = self.headers.get("Origin", "").lower()
-        if os.environ.get("COOKIE_SECURE") == "1" or "https" in forwarded or origin.startswith("https://"):
+        secure = os.environ.get("COOKIE_SECURE") == "1" or "https" in forwarded or origin.startswith("https://")
+        same_site = "None" if secure else "Lax"
+        if clear:
+            value = f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite={same_site}; Max-Age=0"
+        else:
+            value = f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite={same_site}; Max-Age={SESSION_TTL_SECONDS}"
+        if secure:
             value += "; Secure"
         return {"Set-Cookie":value}
 
@@ -1899,7 +1923,7 @@ class Handler(BaseHTTPRequestHandler):
             con.commit()
             row = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
             token = self.new_session(user_id)
-            self.json(201, {"user":public_user(row)}, self.auth_cookie(token))
+            self.json(201, {"user":public_user(row), "token":token}, self.auth_cookie(token))
         except Exception:
             con.rollback()
             raise
@@ -1924,15 +1948,12 @@ class Handler(BaseHTTPRequestHandler):
         key = self.client_address[0] if getattr(self, "client_address", None) else "unknown"
         LOGIN_FAILURES.pop(key, None)
         token = self.new_session(row["id"])
-        self.json(200, {"user":public_user(row)}, self.auth_cookie(token))
+        self.json(200, {"user":public_user(row), "token":token}, self.auth_cookie(token))
 
     def logout(self):
-        cookie = SimpleCookie()
-        try: cookie.load(self.headers.get("Cookie", ""))
-        except Exception: pass
-        morsel = cookie.get(SESSION_COOKIE)
-        if morsel and morsel.value:
-            token_hash = hashlib.sha256(morsel.value.encode("utf-8")).hexdigest()
+        token = self.request_token()
+        if token:
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
             con = connect()
             try: con.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
             finally: con.close()
@@ -2456,6 +2477,14 @@ class Handler(BaseHTTPRequestHandler):
             # Cible des QR codes : on renvoie vers le desk, code prérempli.
             self.send_response(302)
             self.send_header("Location", "/?badge=" + quote(badge_link.group(1), safe=""))
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        if path in ("/reset", "/depannage"):
+            # Raccourci de dépannage : vide le cache hors ligne côté navigateur.
+            self.send_response(302)
+            self.send_header("Location", "/?reset=1")
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

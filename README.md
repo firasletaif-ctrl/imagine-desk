@@ -18,6 +18,13 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 
 ## Comptes et permissions
 
+La session est portée par un cookie `HttpOnly` **et** par un jeton renvoyé à la
+connexion, que le navigateur transmet dans l’en-tête `Authorization`. Le jeton est
+nécessaire quand la page est affichée dans une iframe d’un autre domaine (aperçu,
+portail) ou quand le navigateur bloque les cookies tiers : sans lui, chaque action
+après la connexion répondait 401 et l’écran affichait « votre session a expiré ».
+La déconnexion supprime la session des deux côtés.
+
 - **Administrateur** : crée, archive et supprime (corbeille 30 jours) les congrès, importe les listes, gère les comptes et les mots de passe.
 - **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées, confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
 - **Corbeille** : la suppression est ouverte à **tous les comptes** et reste réversible ; seul l’administrateur peut **effacer définitivement** (voir « Supprimer ou restaurer un inscrit »).
@@ -301,10 +308,10 @@ Si l’application reste vide après la connexion, c’est presque toujours un f
 `app.js`/`styles.css` resté dans le cache du navigateur ou du service worker après
 une mise à jour.
 
-1. Ouvrez l’adresse du site suivie de **`?reset=1`** (par exemple
-   `http://192.168.1.20:8000/?reset=1`) : le cache hors ligne et le service worker
-   sont vidés, puis la page se recharge. Les données locales et les actions en
-   attente de synchronisation sont conservées.
+1. Ouvrez l’adresse du site suivie de **`/?reset=1`** (par exemple
+   `http://192.168.1.20:8000/?reset=1`, ou simplement `/reset`) : le cache hors ligne
+   et le service worker sont vidés, puis la page se recharge. Les données locales et
+   les actions en attente de synchronisation sont conservées.
 2. Sinon, forcez le rechargement : `Ctrl+Maj+R` (`Cmd+Maj+R` sur Mac), ou fenêtre de
    navigation privée.
 3. Vérifiez la version chargée dans la console du navigateur (F12) :
