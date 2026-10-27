@@ -29,6 +29,23 @@ DEMO_USERS = [
 
 DEMO_EVENT = ("evt-demo-automne", "Congrès d’automne 2026", "2026-11-12", "Hôtel Laico, Tunis", "TND")
 
+# Organisations de prise en charge (nom, point d’accueil, référent, contact, consigne).
+# Elles correspondent aux organisations des fiches inscrits : au self check-in, le
+# rapprochement est automatique et le participant voit où aller.
+DEMO_ORGS = [
+    ("Entreprise Exemple", "Stand 12 · Hall B", "Nadia Ben Amor", "+216 22 111 222", "Rendez-vous au stand à 9h pour la visite guidée."),
+    ("Groupe Medina", "Stand 7 · Hall A", "Walid Chaabane", "+216 71 656 056", ""),
+    ("Université de Tunis", "Comptoir 3", "Leïla Mejri", "", "Les intervenants sont attendus en salle 2 à 8h45."),
+    ("TechLab", "Stand 21", "", "", ""),
+    ("Media Plus", "Salle de presse · 1er étage", "Ines Barkia", "+216 22 902 824", "Accréditation à retirer à la salle de presse."),
+    ("Cabinet Nord", "Accueil général", "", "", ""),
+    ("Imagine Events", "Bureau organisateur", "Équipe Imagine", "+216 71 656 056", "Badge équipe à retirer au bureau organisateur."),
+    ("Startup Village", "Village start-up · Hall C", "Sami Ayari", "", "Présentez-vous au village start-up avec votre badge."),
+]
+
+# Lien public de démonstration (fictif) : /self/demo-self-checkin-2026
+DEMO_SELF_TOKEN = "demo-self-checkin-2026"
+
 DEMO_PEOPLE = [
     # nom, e-mail, organisation, catégorie, statut paiement, montant, moyen, référence, heure arrivée, confirmé par
     ("Amira Ben Salem", "amira.bensalem@example.tn", "Entreprise Exemple", "vip", "paid", 150.0, "cash", "REC-1042", "09:12", "demo.accueil"),
@@ -102,11 +119,40 @@ def main() -> int:
                  status, amount, method, reference, confirmed_at, confirmed_by, now, now),
             )
             created_people += 1
+
+        # Organisations & prise en charge (idempotent : rien n’est dupliqué).
+        created_orgs = 0
+        for index, (org_name, desk, host, contact, message) in enumerate(DEMO_ORGS, start=1):
+            if con.execute(
+                "SELECT 1 FROM event_orgs WHERE event_id=? AND lower(name)=lower(?)", (event_id, org_name)
+            ).fetchone():
+                continue
+            con.execute(
+                "INSERT INTO event_orgs(id,event_id,name,desk,host,contact,message,sort_order,active,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (f"org-demo-{index}", event_id, org_name, desk, host, contact, message, index, 1, now, now),
+            )
+            created_orgs += 1
+
+        # Un inscrit déjà rattaché explicitement : la page publique montre alors la
+        # carte « Votre prise en charge » (les autres passent par la reconnaissance).
+        con.execute(
+            "UPDATE participants SET care_org=? WHERE id=? AND TRIM(COALESCE(care_org,''))=''",
+            (DEMO_ORGS[0][0], "p-demo-1"),
+        )
+
+        # Self check-in ouvert sur un lien de démonstration stable.
+        con.execute(
+            "UPDATE events SET self_checkin_token=?,self_checkin_enabled=1 WHERE id=?",
+            (DEMO_SELF_TOKEN, event_id),
+        )
+        con.commit()
     finally:
         con.close()
 
     print(f"Base : {server.db_display_path()}")
-    print(f"Comptes créés : {created_users} — Participants créés : {created_people}")
+    print(f"Comptes créés : {created_users} — Participants créés : {created_people} — Organisations créées : {created_orgs}")
+    print(f"Self check-in de démonstration : /self/{DEMO_SELF_TOKEN}")
     print("Comptes de démonstration :")
     for _, username, password, role in DEMO_USERS:
         print(f"  - {username} / {password} ({role})")

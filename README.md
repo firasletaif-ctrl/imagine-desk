@@ -20,6 +20,7 @@ Prototype web réutilisable pour gérer plusieurs congrès, importer des partici
 
 - **Administrateur** : crée, archive et supprime les congrès (corbeille), importe les listes, gère les comptes et les mots de passe.
 - **Agent desk** : consulte les événements, recherche les inscrits, confirme les arrivées (y compris en **mode rush**), confirme les paiements (et gère la grille tarifaire et les modèles de badge du congrès), ajoute un participant et le met à la corbeille.
+- **Organisations & prise en charge** : la liste des organisations d’un congrès est modifiable par **tous les comptes**, comme la grille tarifaire.
 - **Imagine Self Check-in** : l’**administrateur** ouvre, désactive ou renouvelle le lien public d’un congrès ; les participants, eux, n’ont besoin d’aucun compte.
 - **Corbeille** : un inscrit peut être supprimé par **tous les comptes** ; un congrès, par l’**administrateur**. Dans les deux cas la suppression est **réversible** : seul l’administrateur peut effacer définitivement (voir « Supprimer ou restaurer un inscrit » et « Supprimer ou restaurer un congrès »).
 - Les mots de passe sont hachés côté serveur (PBKDF2); les sessions expirent après 12 heures. Chaque utilisateur peut changer son mot de passe; l’administrateur peut désactiver un compte ou réinitialiser le mot de passe d’un autre membre.
@@ -58,9 +59,11 @@ depuis leur téléphone ou une borne, sans compte et sans installation.
 
 Points à connaître :
 
-- **Aucune liste n’est exposée** : seules les correspondances exactes répondent, et la page ne renvoie
-  qu’un nom, une organisation et une heure d’arrivée. Le compteur global (arrivées / inscrits) reste
-  agrégé.
+- **Aucune liste d’inscrits n’est exposée** : seules les correspondances exactes (code, e-mail, nom
+  complet unique) répondent, et la page ne renvoie qu’un nom, une organisation et une heure
+  d’arrivée. Le compteur global (arrivées / inscrits) reste agrégé. Seul le **nom des organisations**
+  du congrès est proposé au participant qui vient de confirmer son arrivée, pour qu’il puisse choisir
+  la sienne : aucune donnée personnelle n’y figure.
 - Les **échecs sont limités** (40 par minute et par congrès) pour freiner les essais en aveugle ; une
   personne qui saisit son vrai code n’est jamais ralentie.
 - Un participant déjà enregistré revoit son heure d’arrivée : le self check-in est **idempotent**.
@@ -69,6 +72,40 @@ Points à connaître :
 - Chaque arrivée en autonomie est tracée (`self-checkin` dans l’historique de synchronisation) et la
   sauvegarde conserve le lien (`self_checkin_token` / `self_checkin_enabled`, colonnes 11 et 12 de
   `01_events.csv`).
+
+## Organisations & prise en charge (qui accueille qui)
+
+Chaque congrès tient sa **liste d’organisations** : c’est elle qui dit au participant, dès son
+self check-in, **où aller** et **qui le prend en charge**.
+
+1. **Vue générale → Organisations** (ouvert à tous les comptes, comme la grille tarifaire).
+2. **Reprendre depuis les participants** crée la liste de départ à partir des organisations déjà
+   saisies sur les fiches inscrits : « Pfizer », « pfizer » et « Pfizer Tunisie SA » donnent **une
+   seule** ligne. Les compteurs indiquent combien d’inscrits chaque ligne a déjà regroupés.
+3. Complétez pour chaque organisation : **point d’accueil** (stand 12 · hall B, comptoir 3…),
+   **référent** (la personne qui prend en charge), **contact**, et une **consigne** affichée au
+   participant (« rendez-vous à 9h au stand »). Décochez **Active** pour la retirer du self check-in
+   sans la supprimer ; les flèches changent l’ordre d’affichage.
+4. Au self check-in, l’organisation de la fiche est **rapprochée automatiquement** de la liste :
+   la casse, les accents, la forme juridique (« SA », « SARL »), les mots en trop (« Laboratoires
+   Nutricia », « Bureau d’études STCCCV ») et les petites fautes de frappe sont ignorés
+   (`Pfitzer` → **Pfizer**, `SANOFI-AVENTIS` → **Sanofi**).
+5. La page publique affiche alors le nom, le **point d’accueil**, le **référent**, le contact et la
+   consigne ; si le rapprochement est incertain, elle propose les organisations les plus proches et
+   la liste complète, et le participant **choisit ou corrige** lui-même. Le choix est enregistré sur
+   sa fiche (`care_org`) et visible au desk.
+
+Points à connaître :
+
+- **Calcul 100 % local** (bibliothèque standard Python, aucune API payante, aucun appel réseau) :
+  comparable à la casse et aux accents, score de similarité, seuil de reconnaissance automatique
+  **0,82** et seuil de proposition **0,45**.
+- Le **desk** affiche aussi la prise en charge : sur la fiche de l’inscrit, dans la liste, dans la
+  confirmation du mode rush (« → Stand 12 · Hall B ») et par un rappel après le check-in.
+- Les compteurs par organisation (inscrits, arrivées, rapprochements automatiques) sont recalculés
+  avec le même rapprochement que le self check-in : un inscrit rattaché automatiquement est compté.
+- La liste est **propre au congrès** ; elle part avec lui dans la corbeille, revient à la
+  restauration et est effacée au même moment que le congrès.
 
 ## Supprimer ou restaurer un congrès (corbeille)
 
@@ -283,14 +320,19 @@ Le navigateur conserve aussi un cache local de la liste pour le mode hors ligne.
 
 ### Jeu de données de démonstration
 
-Pour recréer une démo complète (2 comptes, 1 congrès, 8 inscrits avec paiements variés) :
+Pour recréer une démo complète (2 comptes, 1 congrès, 8 inscrits avec paiements variés,
+8 organisations de prise en charge et un self check-in déjà ouvert) :
 
 ```bash
 python scripts/demo_seed.py           # crée les données manquantes
 python scripts/demo_seed.py --reset   # repart d’une base de démo neuve
 ```
 
-Comptes créés : `demo.accueil` / `DemoAccueil2026!` (admin) et `desk.accueil` / `DemoDesk2026!` (agent). Ces données sont fictives : ne les remplacez pas par de vraies listes dans une démo publique.
+Comptes créés : `demo.accueil` / `DemoAccueil2026!` (admin) et `desk.accueil` / `DemoDesk2026!` (agent).
+Le congrès de démonstration contient aussi 8 organisations (stands, comptoirs, référents, consignes) et
+son self check-in est ouvert sur le lien stable `/self/demo-self-checkin-2026` : ouvrez-le pour voir la
+prise en charge en conditions réelles (codes `IE-0101` à `IE-0108`). Ces données sont fictives : ne les
+remplacez pas par de vraies listes dans une démo publique.
 
 ## Déploiement Render
 
@@ -304,8 +346,8 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
-- `manifest.json` (format, version, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements et la corbeille), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) et `self_checkin_token` / `self_checkin_enabled` les liens du self check-in ;
+- `manifest.json` (format, **version 8**, moteur, date, nombre de lignes) ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements, la corbeille et `care_org`, l’organisation de prise en charge), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements), `07_event_orgs.csv` (organisations de prise en charge : point d’accueil, référent, contact, consigne) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) et `self_checkin_token` / `self_checkin_enabled` les liens du self check-in ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.
