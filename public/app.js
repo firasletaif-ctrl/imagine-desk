@@ -186,7 +186,9 @@ function renderOnboarding(){
   return `<div class="onboarding"><div><div class="event-kicker">Un même outil · des événements séparés</div><h2>Préparez votre prochain congrès, puis réutilisez le desk à volonté.</h2><p>Chaque congrès aura sa propre liste d’inscrits, ses catégories, ses réglages et son rapport. Les postes connectés au même serveur partageront les arrivées en temps réel ; si la connexion tombe, le desk garde les check-ins en attente sur l’appareil.</p>${createButton}${eventCards}</div><div class="onboarding-steps"><div class="onboarding-step"><b>1</b><span>Créez un événement avec son nom, sa date et son lieu.</span></div><div class="onboarding-step"><b>2</b><span>Importez votre fichier CSV ou Excel (.xlsx), ou ajoutez des inscrits.</span></div><div class="onboarding-step"><b>3</b><span>Ouvrez le desk sur les postes de votre équipe.</span></div><div class="onboarding-step"><b>4</b><span>Exportez le rapport après l’événement.</span></div></div></div>`;
 }
 function renderHome(){
-  const event=getEvent(),stats=makeStats(),people=getPeople();const eventConfigButton=authUser?.role==='admin'?`<div class="hero-actions"><button class="btn btn-secondary" type="button" data-action="open-self-checkin">${icon('qr',13)}Self check-in</button><button class="btn btn-secondary" type="button" data-action="edit-event" data-id="${esc(event.id)}">Paramètres ${icon('arrow',12)}</button></div>`:'';
+  const event=getEvent(),stats=makeStats(),people=getPeople();
+  const orgsButton=`<button class="btn btn-secondary" type="button" data-action="open-orgs" ${event.status==='archived'?'disabled':''}>${icon('people',13)}Organisations</button>`;
+  const eventConfigButton=authUser?.role==='admin'?`<div class="hero-actions">${orgsButton}<button class="btn btn-secondary" type="button" data-action="open-self-checkin">${icon('qr',13)}Self check-in</button><button class="btn btn-secondary" type="button" data-action="edit-event" data-id="${esc(event.id)}">Paramètres ${icon('arrow',12)}</button></div>`:`<div class="hero-actions">${orgsButton}</div>`;
   const recent=people.filter(p=>p.checkedIn).slice().sort((a,b)=>String(b.checkedInAt||'').localeCompare(String(a.checkedInAt||''))).slice(0,5);
   const cats=['participant','vip','speaker','press','team'];
   const categories=cats.map(c=>{const list=people.filter(p=>(p.category||'participant')===c);if(!list.length)return '';const arrived=list.filter(p=>p.checkedIn).length;const pct=Math.round(arrived/list.length*100);return `<div class="presence-row"><div class="presence-label"><i class="presence-dot ${categoryClass(c)}"></i>${esc(displayCategory(c))}</div><span class="presence-number">${arrived} / ${list.length}</span><div class="progress"><i class="${categoryClass(c)}" style="width:${pct}%"></i></div></div>`;}).join('');
@@ -210,7 +212,7 @@ function renderPeople(){
   <div class="footnote">${icon('info')}<span>La recherche rapide accepte les codes que vos lecteurs USB/QR transmettent au champ. Les inscrits supprimés vont dans la <strong>corbeille</strong> du congrès : ils peuvent être restaurés, ou effacés définitivement par un administrateur.</span></div>`;
 }
 function filteredPeople(){const query=norm(peopleQuery);return getPeople().filter(p=>{const match=peopleFilter==='all'||(peopleFilter==='pending'&&!p.checkedIn)||(peopleFilter==='arrived'&&p.checkedIn)||(peopleFilter==='unpaid'&&needsPayment(p))||(peopleFilter==='paid'&&paymentOf(p).status==='paid')||p.category===peopleFilter;const hay=[p.name,p.email,p.company,p.code,displayCategory(p.category),paymentStatusNames[paymentOf(p).status]].join(' ').toLocaleLowerCase('fr');return match&&(!query||hay.includes(query));}).sort((a,b)=>String(a.name).localeCompare(String(b.name),'fr'));}
-function renderPeopleRows(){const tbody=$('#peopleRows');if(!tbody)return;const list=filteredPeople();const count=$('#peopleCount');if(count)count.textContent=`${list.length} résultat${list.length===1?'':'s'} · ${getPeople().length} inscrit${getPeople().length===1?'':'s'}`;if(!list.length){tbody.innerHTML=`<tr><td colspan="8"><div class="empty-state"><strong>${getPeople().length?'Aucun participant trouvé':'Votre liste est vide'}</strong>${getPeople().length?'Essayez une autre recherche ou un autre filtre.':'Importez un CSV/Excel (.xlsx) ou ajoutez un participant.'}</div></td></tr>`;refreshSelectionBar();return;}const archived=getEvent()?.status==='archived';tbody.innerHTML=list.map(p=>{const selected=peopleSelection.has(String(p.id));return `<tr class="${selected?'row-selected':''}"><td class="check-col"><input type="checkbox" data-select-id="${esc(p.id)}" ${selected?'checked':''} aria-label="Sélectionner ${esc(p.name)}"></td><td><div class="table-person"><span class="avatar">${esc(initials(p.name))}</span><span class="table-person-copy"><button type="button" data-action="details" data-id="${esc(p.id)}">${esc(p.name)}</button><small>${esc(p.email||p.company||'—')}</small></span></div></td><td><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></td><td><span class="code">${esc(p.code||'—')}</span></td><td><span class="status-badge ${p.checkedIn?'arrived':'pending'}"><i></i>${p.checkedIn?'Arrivé':'À accueillir'}</span></td><td>${paymentChipHTML(p)}</td><td>${p.checkedIn?`<span class="time-label">${esc(localTime(p.checkedInAt))}</span>`:'<span style="color:#c4cbd4">—</span>'}</td><td><div class="row-actions"><button class="icon-action" type="button" data-action="badge" data-id="${esc(p.id)}" title="Aperçu badge" aria-label="Aperçu badge">${icon('badge',13)}</button>${p.checkedIn?`<button class="table-action undo" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler</button>`:`<button class="table-action" type="button" data-action="checkin" data-id="${esc(p.id)}" ${archived?'disabled':''}>${icon('check',12)}Confirmer</button>`}<button class="icon-action danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" title="Mettre à la corbeille" aria-label="Mettre à la corbeille" ${archived?'disabled':''}>${icon('trash',13)}</button></div></td></tr>`;}).join('');refreshSelectionBar();}
+function renderPeopleRows(){const tbody=$('#peopleRows');if(!tbody)return;const list=filteredPeople();const count=$('#peopleCount');if(count)count.textContent=`${list.length} résultat${list.length===1?'':'s'} · ${getPeople().length} inscrit${getPeople().length===1?'':'s'}`;if(!list.length){tbody.innerHTML=`<tr><td colspan="8"><div class="empty-state"><strong>${getPeople().length?'Aucun participant trouvé':'Votre liste est vide'}</strong>${getPeople().length?'Essayez une autre recherche ou un autre filtre.':'Importez un CSV/Excel (.xlsx) ou ajoutez un participant.'}</div></td></tr>`;refreshSelectionBar();return;}const archived=getEvent()?.status==='archived';tbody.innerHTML=list.map(p=>{const selected=peopleSelection.has(String(p.id));return `<tr class="${selected?'row-selected':''}"><td class="check-col"><input type="checkbox" data-select-id="${esc(p.id)}" ${selected?'checked':''} aria-label="Sélectionner ${esc(p.name)}"></td><td><div class="table-person"><span class="avatar">${esc(initials(p.name))}</span><span class="table-person-copy"><button type="button" data-action="details" data-id="${esc(p.id)}">${esc(p.name)}</button><small>${esc(p.email||p.company||'—')}${p.careOrg?` · <span class="care-mini">${esc(p.careOrg)}</span>`:''}</small></span></div></td><td><span class="cat-badge ${categoryClass(p.category)}">${esc(displayCategory(p.category))}</span></td><td><span class="code">${esc(p.code||'—')}</span></td><td><span class="status-badge ${p.checkedIn?'arrived':'pending'}"><i></i>${p.checkedIn?'Arrivé':'À accueillir'}</span></td><td>${paymentChipHTML(p)}</td><td>${p.checkedIn?`<span class="time-label">${esc(localTime(p.checkedInAt))}</span>`:'<span style="color:#c4cbd4">—</span>'}</td><td><div class="row-actions"><button class="icon-action" type="button" data-action="badge" data-id="${esc(p.id)}" title="Aperçu badge" aria-label="Aperçu badge">${icon('badge',13)}</button>${p.checkedIn?`<button class="table-action undo" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler</button>`:`<button class="table-action" type="button" data-action="checkin" data-id="${esc(p.id)}" ${archived?'disabled':''}>${icon('check',12)}Confirmer</button>`}<button class="icon-action danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" title="Mettre à la corbeille" aria-label="Mettre à la corbeille" ${archived?'disabled':''}>${icon('trash',13)}</button></div></td></tr>`;}).join('');refreshSelectionBar();}
 function paymentRowsHTML(){
   const settled=getPeople().filter(p=>paymentOf(p).status!=='unpaid').slice().sort((a,b)=>String(b.paymentConfirmedAt||'').localeCompare(String(a.paymentConfirmedAt||'')));
   if(!settled.length)return '<tr><td colspan="8"><div class="empty-state">Aucun paiement confirmé pour le moment.</div></td></tr>';
@@ -307,7 +309,7 @@ async function enterWorkspace(user,offline=false){
   if(!offline)apiOnline=true;else apiOnline=false;
   render();
   if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-  if(navigator.onLine){await refreshEvents(true);chooseActiveEvent();if(store.activeEventId){await Promise.all([refreshParticipants(store.activeEventId,!store.cursorByEvent[store.activeEventId]),loadPrices(store.activeEventId),loadBadgeTemplates(store.activeEventId)]);await syncQueue(store.activeEventId);}}
+  if(navigator.onLine){await refreshEvents(true);chooseActiveEvent();if(store.activeEventId){await Promise.all([refreshParticipants(store.activeEventId,!store.cursorByEvent[store.activeEventId]),loadPrices(store.activeEventId),loadBadgeTemplates(store.activeEventId),ensureOrgsCache(store.activeEventId)]);await syncQueue(store.activeEventId);}}
   saveStore();render();
   await focusBadgeFromQuery();
   if(pollTimer)clearInterval(pollTimer);
@@ -339,6 +341,7 @@ async function performCheckin(personId,action='checkin',skipPaymentWarning=false
   queueOp(eventId,{opId:makeId('op'),eventId,participantId:p.id,action,deviceId:store.deviceId,localTime});applyPending(eventId);saveStore();render(true);
   showToast(action==='checkin'?`Arrivée enregistrée : ${p.name}`:`Arrivée annulée : ${p.name}`);
   if(navigator.onLine)await syncQueue(eventId);
+  if(action==='checkin'){const line=careLine(p);if(line)setTimeout(()=>showToast(`Prise en charge : ${line}`),1500);}
 }
 function queuePersonCreate(person,eventId=store.activeEventId){store.peopleByEvent[eventId]=[...getPeople(eventId),person].sort((a,b)=>a.name.localeCompare(b.name,'fr'));queueOp(eventId,{opId:makeId('op'),eventId,participantId:person.id,action:'create',participant:person,deviceId:store.deviceId});applyPending(eventId);saveStore();}
 
@@ -361,7 +364,7 @@ function openAddModal(){
   openModal(`<div class="modal-head"><div><h2>Ajouter un participant</h2><p>En ligne, l’inscription est enregistrée au serveur. Hors ligne, elle rejoint la file locale.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><form id="personForm"><div class="modal-body"><div class="form-grid"><div class="field full"><label for="personName">Nom complet *</label><input id="personName" name="name" required maxlength="180" placeholder="Ex. Amira Ben Salem"></div><div class="field"><label for="personEmail">E-mail</label><input id="personEmail" name="email" type="email" maxlength="180" placeholder="nom@exemple.tn"></div><div class="field"><label for="personCategory">Catégorie</label><select id="personCategory" name="category"><option value="participant">Participant</option><option value="vip">VIP</option><option value="speaker">Intervenant</option><option value="press">Presse</option><option value="team">Équipe</option></select></div><div class="field full"><label for="personCompany">Organisation</label><input id="personCompany" name="company" maxlength="180" placeholder="Entreprise, institution…"></div><div class="field full"><label for="personCode">Code badge</label><input id="personCode" name="code" maxlength="40" placeholder="Généré automatiquement si vide"><span class="field-hint">Un code court est attribué à chaque participant.</span></div></div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-primary" type="submit">${icon('plus')}Ajouter</button></div></form>`,true);
 }
 function openDetails(id){const p=findPerson(id);if(!p)return;const pay=paymentOf(p);const event=getEvent();openModal(`<div class="modal-head"><div><h2>Fiche participant</h2><p>Inscription à ${esc(event?.name||'ce congrès')}.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="detail-hero"><span class="avatar">${esc(initials(p.name))}</span><div><h3>${esc(p.name)}</h3><p>${esc(p.company||'Organisation non renseignée')}</p></div></div><div class="detail-grid"><div class="detail-cell"><span>Catégorie</span><strong>${esc(displayCategory(p.category))}</strong></div><div class="detail-cell"><span>Statut</span><strong>${p.checkedIn?'Arrivée confirmée':'À accueillir'}</strong></div><div class="detail-cell"><span>E-mail</span><strong>${esc(p.email||'—')}</strong></div><div class="detail-cell"><span>Code badge</span><strong>${esc(p.code||'—')}</strong></div><div class="detail-cell"><span>Paiement</span><strong>${esc(paymentStatusNames[pay.status])}${pay.status==='paid'&&pay.amount>0?` · ${esc(money(pay.amount))}`:''}</strong></div><div class="detail-cell"><span>Moyen de paiement</span><strong>${esc(paymentMethodNames[pay.method]||'—')}</strong></div><div class="detail-cell"><span>Référence</span><strong>${esc(pay.reference||'—')}</strong></div>
-<div class="detail-cell"><span>Tarif appliqué</span><strong>${esc(pay.tariff||'—')}</strong></div><div class="detail-cell"><span>Paiement confirmé</span><strong>${pay.at?`${esc(dateTimeLabel(pay.at))}${pay.by?` · ${esc(pay.by)}`:''}`:'—'}</strong></div><div class="detail-cell"><span>Heure d’arrivée</span><strong>${esc(localTime(p.checkedInAt))}</strong></div><div class="detail-cell"><span>Synchronisation</span><strong>${getQueue().some(op=>op.participantId===p.id)?'En attente':'À jour / local'}</strong></div></div>${needsPayment(p)?`<div class="notice warning" style="margin-top:12px">${icon('cash')}<span><strong>Paiement non confirmé.</strong> Encaissement possible au desk avant ou après l’arrivée.</span></div>`:''}</div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('trash')}Corbeille</button><button class="btn btn-secondary" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('badge')}Voir le badge</button><button class="btn btn-secondary" type="button" data-action="payment" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('cash')}${needsPayment(p)?'Encaisser':'Paiement'}</button>${p.checkedIn?`<button class="btn btn-danger" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler l’arrivée</button>`:`<button class="btn btn-primary" type="button" data-action="checkin" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('check')}Confirmer l’arrivée</button>`}</div>`,true);}
+<div class="detail-cell"><span>Tarif appliqué</span><strong>${esc(pay.tariff||'—')}</strong></div><div class="detail-cell"><span>Paiement confirmé</span><strong>${pay.at?`${esc(dateTimeLabel(pay.at))}${pay.by?` · ${esc(pay.by)}`:''}`:'—'}</strong></div><div class="detail-cell"><span>Heure d’arrivée</span><strong>${esc(localTime(p.checkedInAt))}</strong></div><div class="detail-cell"><span>Synchronisation</span><strong>${getQueue().some(op=>op.participantId===p.id)?'En attente':'À jour / local'}</strong></div><div class="detail-cell"><span>Prise en charge</span><strong>${esc(p.careOrg||'Rapprochement automatique')}</strong></div></div>${needsPayment(p)?`<div class="notice warning" style="margin-top:12px">${icon('cash')}<span><strong>Paiement non confirmé.</strong> Encaissement possible au desk avant ou après l’arrivée.</span></div>`:''}</div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('trash')}Corbeille</button><button class="btn btn-secondary" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('badge')}Voir le badge</button><button class="btn btn-secondary" type="button" data-action="payment" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('cash')}${needsPayment(p)?'Encaisser':'Paiement'}</button>${p.checkedIn?`<button class="btn btn-danger" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler l’arrivée</button>`:`<button class="btn btn-primary" type="button" data-action="checkin" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('check')}Confirmer l’arrivée</button>`}</div>`,true);}
 
 function paymentMethodOptions(selected){return PAYMENT_METHOD_OPTIONS.map(key=>`<option value="${key}" ${selected===key?'selected':''}>${esc(paymentMethodNames[key])}</option>`).join('');}
 function openPaymentModal(id,options={}){
@@ -506,7 +509,7 @@ function openBadgeModal(id){
   const back=badgeHasBack(model)?`<div class="field-hint" style="margin:14px 0 6px;text-align:center">Verso</div><div class="modal-badge">${badgeFrame(person,model,'back')}</div>`:'';
   openModal(`<div class="modal-head"><div><h2>Aperçu du badge</h2><p>Modèle « ${esc(model?.name||'Modèle de test')} » · ${format}${back?' · recto-verso':''}</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="modal-badge">${badgeFrame(person,model,'front')}</div>${back}<div class="field-hint" style="margin-top:11px;text-align:center">${model?.qrMode==='url'?`QR code : ${esc(qrPayload(person,model))}`:'Le QR code contient la référence du badge'} · rendu à l’échelle de l’impression.</div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-secondary" type="button" data-action="badge-studio">${icon('file')}Modifier le modèle</button><button class="btn btn-primary" type="button" data-action="print-badge" data-id="${esc(person.id)}">${icon('printer')}Imprimer</button></div>`,true);
 }
-function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>Corbeille, en cas d’erreur</strong><br>Cochez un ou plusieurs inscrits, puis <em>Mettre à la corbeille</em> : ils quittent la liste, les compteurs et les badges sans être perdus. Le bouton <em>Corbeille</em> les restaure tels quels ; seul l’administrateur peut les effacer définitivement.</div></div><div class="guide-step"><b>8</b><div><strong>Mode rush</strong><br>Pour l’ouverture des portes : <em>Mode rush</em> affiche un écran plein écran avec un champ toujours prêt. Scannez ou tapez, appuyez sur Entrée : le nom s’affiche en grand et l’arrivée part par lots en arrière-plan. Le compteur « à envoyer » se vide seul, et rien n’est perdu si le réseau tombe.</div></div><div class="guide-step"><b>9</b><div><strong>Imagine Self Check-in</strong><br>Depuis l’accueil, <em>Self check-in</em> ouvre le lien public du congrès et son QR code. Affichez-le à l’entrée : les participants confirment eux-mêmes leur arrivée avec leur code badge ou leur e-mail. Le lien peut être désactivé ou renouvelé à tout moment.</div></div><div class="guide-step"><b>10</b><div><strong>Supprimer un congrès</strong><br>Un administrateur peut retirer un congrès depuis l’onglet <em>Congrès</em> : il part dans <em>Congrès supprimés</em> avec ses inscrits et ses badges, et se restaure en un appui. Seul l’effacement définitif est irréversible.</div></div><div class="guide-step"><b>11</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
+function openHelp(){openModal(`<div class="modal-head"><div><h2>Guide du desk</h2><p>Préparation pour un ou plusieurs postes d’accueil.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><b>1</b><div><strong>Créez un congrès distinct</strong><br>Nom, date et lieu sont propres à chaque événement. Les données ne se mélangent pas.</div></div><div class="guide-step"><b>2</b><div><strong>Importez la liste</strong><br>Les modèles CSV/Excel acceptent nom complet, e-mail, organisation, catégorie, code badge, statut et colonnes de paiement (paiement, montant, moyen). Les doublons sont rapprochés par e-mail ou code.</div></div><div class="guide-step"><b>3</b><div><strong>Ouvrez le même événement sur chaque poste</strong><br>Tous les appareils doivent accéder à la même adresse du serveur central pour synchroniser les check-ins.</div></div><div class="guide-step"><b>4</b><div><strong>Définissez la grille tarifaire</strong><br>Paramètres du congrès → <em>Grille tarifaire</em> : autant de lignes que nécessaire (« 2 nuits d’hôtel », « 1 nuit », « sans hébergement », early bird…). Au paiement, un appui sur le tarif remplit le montant.</div></div><div class="guide-step"><b>5</b><div><strong>Confirmez les paiements</strong><br>Ouvrez la colonne « Paiement » d’un inscrit (ou sa fiche) : le tarif se choisit en un appui, le montant, le moyen de paiement et une référence restent modifiables. La confirmation est horodatée et signée par l’agent connecté. Les inscrits non payés déclenchent un avertissement au check-in, sans bloquer l’arrivée.</div></div><div class="guide-step"><b>6</b><div><strong>En cas de coupure</strong><br>Les arrivées, les paiements et les ajouts faits sur cet appareil sont mis en file locale. À la reconnexion, ils sont renvoyés automatiquement. Gardez l’onglet ouvert pendant la panne.</div></div><div class="guide-step"><b>7</b><div><strong>Corbeille, en cas d’erreur</strong><br>Cochez un ou plusieurs inscrits, puis <em>Mettre à la corbeille</em> : ils quittent la liste, les compteurs et les badges sans être perdus. Le bouton <em>Corbeille</em> les restaure tels quels ; seul l’administrateur peut les effacer définitivement.</div></div><div class="guide-step"><b>8</b><div><strong>Mode rush</strong><br>Pour l’ouverture des portes : <em>Mode rush</em> affiche un écran plein écran avec un champ toujours prêt. Scannez ou tapez, appuyez sur Entrée : le nom s’affiche en grand et l’arrivée part par lots en arrière-plan. Le compteur « à envoyer » se vide seul, et rien n’est perdu si le réseau tombe.</div></div><div class="guide-step"><b>9</b><div><strong>Imagine Self Check-in</strong><br>Depuis l’accueil, <em>Self check-in</em> ouvre le lien public du congrès et son QR code. Affichez-le à l’entrée : les participants confirment eux-mêmes leur arrivée avec leur code badge ou leur e-mail. Le lien peut être désactivé ou renouvelé à tout moment.</div></div><div class="guide-step"><b>10</b><div><strong>Organisations & prise en charge</strong><br>Accueil → <em>Organisations</em> : listez les organisations du congrès (nom, point d’accueil, référent, contact, consigne) ; le bouton <em>Reprendre depuis les participants</em> les crée en un appui à partir des fiches inscrits. Au self check-in, l’organisation de la fiche est reconnue automatiquement (majuscules, accents, « SA/SARL » et fautes de frappe ignorés) : le participant voit <strong>où aller</strong> et <strong>qui le prend en charge</strong>, et peut corriger son organisation lui-même. Les compteurs indiquent les inscrits, les arrivées et les rapprochements automatiques par organisation.</div></div><div class="guide-step"><b>11</b><div><strong>Supprimer un congrès</strong><br>Un administrateur peut retirer un congrès depuis l’onglet <em>Congrès</em> : il part dans <em>Congrès supprimés</em> avec ses inscrits et ses badges, et se restaure en un appui. Seul l’effacement définitif est irréversible.</div></div><div class="guide-step"><b>12</b><div><strong>À la fin</strong><br>Vérifiez l’indicateur « synchronisé », exportez le rapport CSV (présences et paiements), puis archivez le congrès.</div></div></div><div class="notice warning" style="margin:15px 0 0">${icon('info')}<span>Les comptes administrateur et agent sont actifs. Avant toute mise en production, ajoutez un domaine HTTPS et des sauvegardes automatiques; ne saisissez pas de vraies données personnelles dans l’aperçu de démonstration.</span></div></div><div class="modal-footer"><button class="btn btn-primary" type="button" data-action="close-modal">Compris</button></div>`,true);}
 async function openAccountsModal(){
   if(authUser?.role!=='admin'){showToast('Seul l’administrateur peut gérer les comptes.');return;}
   let storage=null;
@@ -1680,6 +1683,7 @@ function openRush(){
   if(!root)return;
   root.hidden=false;
   document.body.classList.add('rush-open');
+  ensureOrgsCache(event.id);
   renderRush();
   clearInterval(rushClockTimer);
   rushClockTimer=setInterval(updateRushClock,10000);
@@ -1851,7 +1855,8 @@ function rushConfirm(query){
   rush.last.unshift({id:person.id,name:person.name,at:now});
   rush.last=rush.last.slice(0,8);
   const payWarning=needsPayment(person);
-  setRushFeedback('ok',person.name,`${displayCategory(person.category)}${person.company?` · ${person.company}`:''}${payWarning?' · paiement à confirmer':''}`,payWarning?' <em>Arrivée acceptée, signalez le paiement à l’accueil.</em>':'');
+  const care=careLine(person);
+  setRushFeedback('ok',person.name,`${displayCategory(person.category)}${person.company?` · ${person.company}`:''}${care?` → ${care}`:''}${payWarning?' · paiement à confirmer':''}`,payWarning?' <em>Arrivée acceptée, signalez le paiement à l’accueil.</em>':'');
   rushBeep('ok');
   updateRushChrome();
   scheduleSync(eventId,1200);
@@ -1989,6 +1994,175 @@ function openSelfCheckinPreview(){
   if(url)window.open(url,'_blank','noopener');
 }
 
+/* ── Organisations & prise en charge ───────────────────────────────────
+   Chaque congrès tient sa liste d’organisations (qui prend en charge qui,
+   où aller, quelle consigne afficher). Au self check-in, le serveur
+   rapproche l’organisation inscrite sur la fiche de cette liste : le
+   participant voit immédiatement son point d’accueil. La liste est ouverte
+   à tous les comptes, comme la grille tarifaire. */
+let orgsState=null;   // {eventId, stats:Map(id→{total,arrived,auto})}
+function orgsTarget(){
+  const event=getEvent();
+  if(!event){showToast('Sélectionnez un congrès avant de gérer les organisations.');return null;}
+  if(event.status==='archived'){showToast('Ce congrès est archivé. Réactivez-le pour modifier ses organisations.');return null;}
+  return event;
+}
+async function openOrgsModal(){
+  const event=orgsTarget();if(!event)return;
+  orgsState={eventId:event.id,stats:new Map()};
+  openModal(`<div id="orgsRoot">${orgsHead(event)}<div class="modal-body"><p class="orgs-loading">Chargement des organisations…</p></div></div>`,true);
+  await loadOrgs(event.id);
+}
+function orgsHead(event){
+  return `<div class="modal-head"><div><h2>Organisations & prise en charge</h2><p>${esc(event.name||'Congrès')} · qui accueille qui</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>`;
+}
+async function loadOrgs(eventId=store.activeEventId){
+  const root=$('#orgsRoot');if(!root)return;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(eventId)}/orgs`);
+    orgsState={eventId,stats:new Map()};
+    (data.orgs||[]).forEach(org=>orgsState.stats.set(String(org.id||''),{total:Number(org.total||0),arrived:Number(org.arrived||0),auto:Number(org.auto||0)}));
+    renderOrgsPanel(data.orgs||[]);
+  }catch(error){
+    const event=getEvent()||{};
+    root.innerHTML=`${orgsHead(event)}<div class="modal-body"><div class="notice warning">${icon('info')}<span>${esc(error.message||'Impossible de charger les organisations de ce congrès.')}</span></div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button></div>`;
+  }
+}
+function orgStatLine(id){
+  const stat=orgsState&&orgsState.stats.get(String(id||''));
+  if(!stat)return '<span class="org-stat new">Nouvelle organisation — compteurs à la prochaine ouverture</span>';
+  return `<span class="org-stat">${stat.total} inscrit${stat.total===1?'':'s'}</span><span class="org-stat">${stat.arrived} arrivée${stat.arrived===1?'':'s'}</span><span class="org-stat">${stat.auto} rapprochement${stat.auto===1?'':'s'} auto</span>`;
+}
+function orgRowHTML(org={}){
+  return `<div class="org-row" data-org-row data-org-id="${esc(org.id||'')}">
+    <div class="org-row-top">
+      <input class="org-input org-name" data-org-field="name" type="text" maxlength="180" value="${esc(org.name||'')}" placeholder="Nom de l’organisation (ex. Pfizer)" aria-label="Nom de l’organisation">
+      <div class="org-row-tools">
+        <label class="org-active"><input type="checkbox" data-org-field="active" ${org.active===false?'':'checked'}> Active</label>
+        <button class="icon-action" type="button" data-action="org-up" title="Monter cette organisation" aria-label="Monter">↑</button>
+        <button class="icon-action" type="button" data-action="org-down" title="Descendre cette organisation" aria-label="Descendre">↓</button>
+        <button class="icon-action danger" type="button" data-action="org-remove" title="Retirer cette organisation" aria-label="Retirer">×</button>
+      </div>
+    </div>
+    <div class="org-row-fields">
+      <input class="org-input" data-org-field="desk" type="text" maxlength="180" value="${esc(org.desk||'')}" placeholder="Où aller : stand 12 · hall B, comptoir 3…" aria-label="Point d’accueil">
+      <input class="org-input" data-org-field="host" type="text" maxlength="120" value="${esc(org.host||'')}" placeholder="Référent qui prend en charge" aria-label="Référent">
+      <input class="org-input" data-org-field="contact" type="text" maxlength="180" value="${esc(org.contact||'')}" placeholder="Téléphone ou e-mail du référent" aria-label="Contact">
+      <input class="org-input org-message" data-org-field="message" type="text" maxlength="400" value="${esc(org.message||'')}" placeholder="Consigne affichée au participant (ex. rendez-vous à 9h au stand)" aria-label="Consigne">
+    </div>
+    <div class="org-row-foot">${orgStatLine(org.id)}</div>
+  </div>`;
+}
+function renderOrgsPanel(orgs){
+  const root=$('#orgsRoot');if(!root)return;
+  const event=getEvent()||{};
+  const total=(orgs||[]).reduce((sum,org)=>sum+Number(org.total||0),0);
+  const auto=(orgs||[]).reduce((sum,org)=>sum+Number(org.auto||0),0);
+  const arrived=(orgs||[]).reduce((sum,org)=>sum+Number(org.arrived||0),0);
+  root.innerHTML=`${orgsHead(event)}
+  <form id="orgsForm"><div class="modal-body">
+    <div class="orgs-summary">
+      <div class="orgs-summary-main"><strong>${(orgs||[]).length}</strong><span>organisation${(orgs||[]).length===1?'':'s'} dans ce congrès</span></div>
+      <div class="orgs-summary-counts"><span>${total} inscrit${total===1?'':'s'} rattaché${total===1?'':'s'}</span><span>${auto} rapprochement${auto===1?'':'s'} automatique${auto===1?'':'s'}</span><span>${arrived} arrivée${arrived===1?'':'s'}</span></div>
+    </div>
+    <p class="orgs-intro">Au self check-in, l’organisation inscrite sur la fiche du participant est rapprochée de cette liste (majuscules, accents, « SA », « SARL » et petites fautes de frappe sont ignorés). Le participant voit alors <strong>où aller</strong> et <strong>qui le prend en charge</strong>. Il peut aussi corriger lui-même son organisation.</p>
+    <div class="orgs-toolbar">
+      <button class="btn btn-secondary btn-sm" type="button" data-action="org-add">${icon('plus',13)}Ajouter une organisation</button>
+      <button class="btn btn-soft btn-sm" type="button" data-action="org-import" ${total?'':'disabled'}>${icon('people',13)}Reprendre depuis les participants</button>
+      <span class="orgs-hint">${total?'':'Importez d’abord des inscrits : leurs organisations deviendront la liste de départ.'}</span>
+    </div>
+    <div class="org-rows" id="orgRows">${(orgs||[]).length?(orgs||[]).map(orgRowHTML).join(''):orgRowHTML({})}</div>
+    <div class="notice" style="margin-top:12px">${icon('info')}<span>Les compteurs « rapprochements auto » indiquent les inscrits dont l’organisation a été reconnue automatiquement. Liste et consignes sont partagées entre tous les postes connectés.</span></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-primary" type="submit">${icon('check')}Enregistrer les organisations</button></div></form>`;
+}
+function addOrgRow(){
+  const rows=$('#orgRows');if(!rows)return;
+  rows.insertAdjacentHTML('beforeend',orgRowHTML({}));
+  const inputs=$$('#orgRows .org-row');
+  const last=inputs[inputs.length-1];
+  last?.scrollIntoView({block:'nearest'});
+  $('.org-name',last)?.focus();
+}
+function moveOrgRow(button,delta){
+  const row=button.closest('.org-row');if(!row)return;
+  if(delta<0&&row.previousElementSibling)row.parentNode.insertBefore(row,row.previousElementSibling);
+  if(delta>0&&row.nextElementSibling)row.parentNode.insertBefore(row.nextElementSibling,row);
+  button.blur();
+}
+function collectOrgs(){
+  return $$('#orgRows .org-row').map(row=>({
+    id:row.dataset.orgId||'',
+    name:String($('[data-org-field="name"]',row)?.value||'').trim(),
+    desk:String($('[data-org-field="desk"]',row)?.value||'').trim(),
+    host:String($('[data-org-field="host"]',row)?.value||'').trim(),
+    contact:String($('[data-org-field="contact"]',row)?.value||'').trim(),
+    message:String($('[data-org-field="message"]',row)?.value||'').trim(),
+    active:!!$('[data-org-field="active"]',row)?.checked
+  })).filter(org=>org.name);
+}
+const orgsCacheByEvent={};
+async function ensureOrgsCache(eventId=store.activeEventId){
+  const cached=orgsCacheByEvent[eventId];
+  if(cached&&Date.now()-cached.at<120000)return cached.orgs;
+  if(!eventId||!navigator.onLine)return cached?cached.orgs:[];
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(eventId)}/orgs`);
+    const orgs=(data.orgs||[]).filter(org=>org.active!==false);
+    orgsCacheByEvent[eventId]={at:Date.now(),orgs};
+    return orgs;
+  }catch(error){return cached?cached.orgs:[];}
+}
+const ORG_STOP_WORDS=['societe','societes','groupe','tunisie','tunis','laboratoire','laboratoires','clinique','cabinet','bureau','etudes','etude','compagnie','company','office','centre','centre','hopital','chu'];
+function orgWords(value){
+  return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
+    .replace(/[^a-z0-9]+/g,' ').split(' ').filter(word=>word.length>3&&!ORG_STOP_WORDS.includes(word));
+}
+function orgHintFor(person){
+  const cached=orgsCacheByEvent[store.activeEventId];
+  const orgs=cached?cached.orgs:[];
+  const company=String(person?.company||'').trim();
+  if(!orgs.length||!company)return null;
+  const explicit=orgs.find(org=>norm(org.name)===norm(company));
+  if(explicit)return explicit;
+  const words=orgWords(company);
+  if(!words.length)return null;
+  return orgs.find(org=>{const own=orgWords(org.name);return own.length&&own.some(word=>words.includes(word));})||null;
+}
+function careLine(person){
+  const explicit=String(person?.careOrg||'').trim();
+  if(explicit)return explicit;
+  const hint=orgHintFor(person);
+  return hint?`${hint.name}${hint.desk?` — ${hint.desk}`:''}`:'';
+}
+async function saveOrgs(){
+  const event=getEvent();if(!event||!orgsState)return false;
+  const orgs=collectOrgs();
+  if(!orgs.length&&!window.confirm('La liste sera vide : aucun participant ne verra d’organisation au self check-in. Enregistrer quand même ?'))return false;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/orgs`,{method:'PUT',body:JSON.stringify({orgs:orgs.map(org=>({name:org.name,desk:org.desk,host:org.host,contact:org.contact,message:org.message,active:org.active,id:org.id||undefined}))})});
+    orgsState={eventId:event.id,stats:new Map()};
+    (data.orgs||[]).forEach(org=>orgsState.stats.set(String(org.id||''),{total:Number(org.total||0),arrived:Number(org.arrived||0),auto:Number(org.auto||0)}));
+    orgsCacheByEvent[event.id]={at:Date.now(),orgs:(data.orgs||[]).filter(org=>org.active!==false)};
+    renderOrgsPanel(data.orgs||[]);
+    if(orgs.length!==(data.orgs||[]).length)showToast(`${(data.orgs||[]).length} organisation(s) enregistrée(s) : les doublons d’écriture ont été fusionnés.`);
+    else showToast(`Liste enregistrée : ${(data.orgs||[]).length} organisation(s).`);
+    return true;
+  }catch(error){showToast(error.message||'Enregistrement des organisations impossible.');return false;}
+}
+async function importOrgsFromParticipants(){
+  const event=getEvent();if(!event)return;
+  if(!window.confirm('Ajouter à la liste les organisations déjà saisies sur les fiches inscrits ? Les lignes existantes ne sont pas modifiées.'))return;
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/orgs/from-participants`,{method:'POST',body:'{}'});
+    orgsState={eventId:event.id,stats:new Map()};
+    (data.orgs||[]).forEach(org=>orgsState.stats.set(String(org.id||''),{total:Number(org.total||0),arrived:Number(org.arrived||0),auto:Number(org.auto||0)}));
+    orgsCacheByEvent[event.id]={at:Date.now(),orgs:(data.orgs||[]).filter(org=>org.active!==false)};
+    renderOrgsPanel(data.orgs||[]);
+    const added=(data.added||[]).length;
+    showToast(added?`${added} organisation(s) ajoutée(s) depuis les fiches inscrits.`:'Aucune nouvelle organisation : la liste est déjà à jour.');
+  }catch(error){showToast(error.message||'Reprise depuis les participants impossible.');}
+}
 // Navigation et actions de l’interface.
 document.addEventListener('click',async event=>{
   const page=event.target.closest('[data-page]');if(page){event.preventDefault();setPage(page.dataset.page);return;}
@@ -2007,6 +2181,12 @@ document.addEventListener('click',async event=>{
   else if(action==='rush-close'){closeRush();return;}
   else if(action==='rush-sound'){toggleRushSound();return;}
   else if(action==='rush-undo'){rushUndoLast();return;}
+  else if(action==='open-orgs'){await openOrgsModal();return;}
+  else if(action==='org-add'){addOrgRow();return;}
+  else if(action==='org-up'){moveOrgRow(button,-1);return;}
+  else if(action==='org-down'){moveOrgRow(button,1);return;}
+  else if(action==='org-remove'){button.closest('.org-row')?.remove();return;}
+  else if(action==='org-import'){await importOrgsFromParticipants();return;}
   else if(action==='open-self-checkin'){await openSelfCheckinModal();return;}
   else if(action==='self-enable'){await setSelfCheckin(true);return;}
   else if(action==='self-disable'){await setSelfCheckin(false);return;}
@@ -2079,7 +2259,7 @@ document.addEventListener('change',async event=>{
   if(event.target.id==='paymentStatus'){const paid=event.target.value==='paid';['paymentAmount','paymentMethod','paymentReference'].forEach(id=>{const field=$('#'+id);if(field)field.disabled=!paid;});}
   if(event.target.matches('[data-user-role]')){const id=event.target.dataset.id,role=event.target.value;try{await api(`/api/users/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({role})});showToast('Rôle mis à jour; ce compte devra se reconnecter.');await openAccountsModal();}catch(error){showToast(error.message||'Modification impossible.');await openAccountsModal();}return;}
   if(event.target.id==='badgeModelSelect'){await setDefaultBadgeTemplate(event.target.value);return;}
-  if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';peopleSelection.clear();saveStore();render();if(id){await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id)]);await syncQueue(id);}}
+  if(event.target.id==='eventSelect'){const id=event.target.value;store.activeEventId=id;currentPage='home';peopleQuery='';peopleFilter='all';badgeQuery='';peopleSelection.clear();saveStore();render();if(id){await Promise.all([refreshParticipants(id,!store.cursorByEvent[id]),loadPrices(id),loadBadgeTemplates(id),ensureOrgsCache(id)]);await syncQueue(id);}}
   if(event.target.id==='csvFile'){const file=event.target.files?.[0];if(file)await importFile(file);event.target.value='';}
   if(event.target.closest?.('#priceRows')){updatePriceSummary();}
   if(event.target.id==='restoreBackupFileInput'){const file=event.target.files?.[0];const label=$('#restoreBackupFileName');if(label)label.textContent=file?`Fichier choisi : ${file.name} (${(file.size/1024).toFixed(0)} Ko)`:'Choisissez le fichier .zip téléchargé par « Exporter la sauvegarde ».';}
@@ -2114,6 +2294,9 @@ document.addEventListener('submit',async event=>{
   }
   if(form.id==='pricesForm'){
     event.preventDefault();await savePrices();return;
+  }
+  if(form.id==='orgsForm'){
+    event.preventDefault();await saveOrgs();return;
   }
   if(form.id==='restoreBackupForm'){
     event.preventDefault();const fd=new FormData(form),file=fd.get('file'),password=String(fd.get('password')||'');

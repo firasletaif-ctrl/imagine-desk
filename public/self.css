@@ -98,3 +98,59 @@ body{
   color:var(--navy);font-family:inherit;font-size:16.5px;font-weight:700;cursor:pointer;
 }
 .self-next:hover{border-color:#B9C7DA;background:#F7FAFD}
+
+/* ── Prise en charge : où aller, qui accueille ─────────────────────── */
+.self-care{
+  margin:20px 0 0;padding:20px 22px;border-radius:18px;
+  border:1px solid var(--line);background:#FBFCFF;text-align:left;
+}
+.self-care-kicker{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.self-care-name{margin:0;color:var(--navy);font-size:25px;font-weight:800;letter-spacing:-.01em;line-height:1.2}
+.self-care-confirmed{border-color:#BFE6D6;background:var(--green-soft)}
+.self-care-confirmed .self-care-kicker{color:var(--green)}
+.self-care-suggested{border-color:#F3D9A4;background:var(--amber-soft)}
+.self-care-suggested .self-care-kicker{color:var(--amber)}
+.self-care-line{display:flex;flex-direction:column;gap:2px;margin:12px 0 0;font-size:15px}
+.self-care-line span{color:var(--muted);font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.self-care-line strong{color:var(--navy);font-size:20px;font-weight:800;line-height:1.25}
+.self-care-message{margin:14px 0 0;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.72);color:var(--ink);font-size:15.5px}
+.self-care-actions{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0 0}
+.self-care-yes,.self-care-more{
+  border:0;border-radius:13px;padding:14px 18px;cursor:pointer;font-family:inherit;
+  font-size:16px;font-weight:800;background:var(--navy);color:#fff;
+}
+.self-care-yes:hover,.self-care-more:hover{background:var(--navy2)}
+.self-care-change{
+  display:block;margin:14px 0 0;padding:0;border:0;background:none;cursor:pointer;font-family:inherit;
+  color:var(--muted);font-size:13.5px;font-weight:600;text-decoration:underline;
+}
+.self-care-change:hover{color:var(--navy)}
+.self-care-help{margin:8px 0 0;color:var(--muted);font-size:14.5px}
+.self-care-suggests{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0}
+.self-care-suggests button{
+  border:1px solid var(--line);border-radius:999px;padding:10px 16px;cursor:pointer;
+  background:#fff;color:var(--navy);font-family:inherit;font-size:15px;font-weight:700;
+}
+.self-care-suggests button:hover{border-color:var(--navy2);background:#F2F6FC}
+.self-care-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px;
+  margin:14px 0 0;max-height:min(46vh,340px);overflow:auto;padding:2px;
+}
+.self-care-grid button{
+  display:flex;flex-direction:column;gap:3px;align-items:flex-start;
+  border:1px solid var(--line);border-radius:14px;padding:13px 14px;cursor:pointer;
+  background:#fff;color:var(--navy);font-family:inherit;font-size:15px;text-align:left;
+}
+.self-care-grid button:hover{border-color:var(--navy2);background:#F2F6FC}
+.self-care-grid button small{color:var(--muted);font-size:12.5px;font-weight:600}
+.self-care-grid button[disabled],.self-care-suggests button[disabled]{opacity:.55;cursor:progress}
+.self-care-error{margin:12px 0 0;color:var(--red);font-size:14px;font-weight:600}
+.self-care-general{border-color:var(--line);background:#F7F9FC}
+@media(max-width:560px){
+  .self-care{padding:16px 16px}
+  .self-care-name{font-size:21px}
+  .self-care-line strong{font-size:18px}
+  .self-care-actions{flex-direction:column}
+  .self-care-yes{width:100%}
+  .self-care-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+}

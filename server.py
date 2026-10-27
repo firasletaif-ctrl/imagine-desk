@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+import difflib
 import unicodedata
 import hashlib
 import hmac
@@ -107,7 +108,7 @@ def redact_database_url(url: str = "") -> str:
 # Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
 # chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
 BACKUP_FORMAT = "imagine-events-desk-backup"
-BACKUP_VERSION = 7
+BACKUP_VERSION = 8
 BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
 
 # (préfixe du fichier, table, colonnes exportées dans cet ordre)
@@ -128,10 +129,16 @@ BACKUP_TABLES = [
         # Corbeille : ces deux colonnes rendent la suppression restaurable même
         # après restauration d’une sauvegarde (v4 et antérieures : colonnes absentes).
         "deleted_at", "deleted_by",
+        # Organisation qui prend en charge l'inscrit (v8).
+        "care_org",
     ]),
     ("04_sync_operations", "sync_operations", ["op_id", "event_id", "participant_id", "action", "result_json", "created_at"]),
     ("05_event_prices", "event_prices", [
         "id", "event_id", "label", "category", "amount", "active", "sort_order", "created_at", "updated_at",
+    ]),
+    ("07_event_orgs", "event_orgs", [
+        "id", "event_id", "name", "desk", "host", "contact", "message",
+        "sort_order", "active", "created_at", "updated_at",
     ]),
     ("06_badge_templates", "badge_templates", [
         "id", "event_id", "name", "format_w", "format_h", "front_json", "back_json",
@@ -140,16 +147,31 @@ BACKUP_TABLES = [
 ]
 
 # Ordre d’insertion (respecte les clés étrangères).
-BACKUP_INSERT_ORDER = ["events", "users", "event_prices", "badge_templates", "participants", "sync_operations"]
+BACKUP_INSERT_ORDER = ["events", "users", "event_prices", "event_orgs", "badge_templates", "participants", "sync_operations"]
 
 # Ordre de suppression (inverse).
-BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "badge_templates", "event_prices", "users", "events"]
+BACKUP_DELETE_ORDER = ["sync_operations", "participants", "sessions", "badge_templates", "event_orgs", "event_prices", "users", "events"]
 
 # Colonnes nulles dans le schéma : une cellule vide devient NULL à la restauration.
 BACKUP_NULLABLE = {"participants": {"checked_in_at", "payment_confirmed_at", "deleted_at"}, "events": {"deleted_at"}, "users": set(),
                    "sync_operations": set(), "event_prices": set(), "badge_templates": set()}
 BACKUP_INTEGER_COLUMNS = {"users": {"active"}, "participants": set(), "events": {"self_checkin_enabled"}, "sync_operations": set(),
-                          "event_prices": {"active", "sort_order"}, "badge_templates": {"is_default"}}
+                          "event_prices": {"active", "sort_order"}, "event_orgs": {"active", "sort_order"},
+                          "badge_templates": {"is_default"}}
+# Colonnes réellement booléennes : les autres colonnes entières (sort_order) gardent
+# leur valeur numérique (l’ordre des tarifs et des organisations doit survivre).
+BACKUP_BOOLEAN_COLUMNS = {"active", "is_default", "self_checkin_enabled"}
+
+
+def backup_integer_value(column: str, value) -> int:
+    """Convertit une cellule entière en respectant sa nature (booléen ou compteur)."""
+    text = str("" if value is None else value).strip()
+    if column in BACKUP_BOOLEAN_COLUMNS:
+        return 1 if text in ("1", "true", "True", "oui", "Oui", "OUI") else 0
+    try:
+        return int(float(text or 0))
+    except ValueError:
+        return 0
 
 BACKUP_INSTRUCTIONS = """SAUVEGARDE COMPLETE - Imagine Events Desk
 =========================================
@@ -180,6 +202,9 @@ CE QUI EST REMPLACE
   corbeille ; la colonne 18 de 03_participants.csv, les inscrits.
   Une date vide = element actif. Les colonnes 11 et 12 de 01_events.csv
   conservent le lien public Imagine Self Check-in (jeton et activation).
+  07_event_orgs.csv contient les organisations du congres (point d'accueil,
+  referent, consigne) ; la colonne 19 de 03_participants.csv indique
+  l'organisation qui prend en charge chaque inscrit.
 - Comptes : remplaces par ceux du ZIP ; votre compte actuel est conserve
   s'il n'y figure pas, pour eviter de perdre l'acces.
 - Sessions : toutes fermees (vous restez connecte sur cet appareil).
@@ -276,7 +301,7 @@ def parse_backup_csv(raw: bytes, table: str, columns: list[str]) -> list[dict]:
             if column in BACKUP_NULLABLE.get(table, set()):
                 item[column] = value if value != "" else None
             elif column in BACKUP_INTEGER_COLUMNS.get(table, set()):
-                item[column] = 1 if value.strip() in ("1", "true", "True", "oui") else 0
+                item[column] = backup_integer_value(column, value)
             else:
                 item[column] = value
         rows.append(item)
@@ -438,6 +463,8 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             # Corbeille (absente des sauvegardes v4 et antérieures : None).
             "deleted_at": clean_text(row.get("deleted_at"), 64) or None,
             "deleted_by": clean_text(row.get("deleted_by"), 80),
+            # Organisation de prise en charge (absente des sauvegardes v7 et antérieures).
+            "care_org": clean_text(row.get("care_org"), 180),
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
         })
         seen_ids.add(person_id)
@@ -448,7 +475,8 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
         op_id = clean_text(row.get("op_id"), 100)
         event_id = clean_text(row.get("event_id"), 100)
         action = clean_text(row.get("action"), 30)
-        if not op_id or op_id in seen_ops or event_id not in event_ids or action not in ("create", "checkin", "undo", "payment"):
+        if not op_id or op_id in seen_ops or event_id not in event_ids or action not in (
+                "create", "checkin", "undo", "payment", "self-checkin", "self-org"):
             continue  # ligne d’historique inutilisable : ignorée sans bloquer la restauration
         result_json = clean_text(row.get("result_json"), 4000) or "{}"
         try:
@@ -628,15 +656,34 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
                 """INSERT INTO participants(
                     id,event_id,name,email,company,category,code,checked_in_at,
                     payment_status,payment_amount,payment_method,payment_reference,payment_tariff,
-                    payment_confirmed_at,payment_confirmed_by,created_at,updated_at,deleted_at,deleted_by
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    payment_confirmed_at,payment_confirmed_by,created_at,updated_at,deleted_at,deleted_by,care_org
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (person["id"], person["event_id"], person["name"], person["email"], person["company"],
                  person["category"], person["code"], person["checked_in_at"], person["payment_status"],
                  person["payment_amount"], person["payment_method"], person["payment_reference"],
                  person["payment_tariff"], person["payment_confirmed_at"], person["payment_confirmed_by"], person["created_at"],
                  now,  # force les postes déjà ouverts à recharger la liste restaurée
-                 person["deleted_at"], person["deleted_by"]),
+                 person["deleted_at"], person["deleted_by"], person["care_org"]),
             )
+        for org in data.get("event_orgs", []):
+            org_id = clean_text(org.get("id"), 100)
+            event_id = clean_text(org.get("event_id"), 100)
+            name = clean_text(org.get("name"), 180)
+            if not org_id or not name or event_id not in event_ids:
+                continue  # ligne inutilisable : jamais bloquant pour une restauration
+            try:
+                con.execute(
+                    "INSERT INTO event_orgs(id,event_id,name,desk,host,contact,message,sort_order,active,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (org_id, event_id, name, clean_text(org.get("desk"), 180), clean_text(org.get("host"), 120),
+                     clean_text(org.get("contact"), 180), clean_text(org.get("message"), 400),
+                     int(str(org.get("sort_order", "0")).strip() or 0),
+                     1 if str(org.get("active", "1")).strip() in ("1", "true", "True", "oui") else 0,
+                     clean_text(org.get("created_at"), 64) or utc_now(),
+                     clean_text(org.get("updated_at"), 64) or utc_now()),
+                )
+            except Exception:
+                continue  # doublon de libellé : on conserve la première organisation
         for operation in clean_operations:
             con.execute(
                 "INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) VALUES(?,?,?,?,?,?)",
@@ -983,6 +1030,28 @@ SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_badge_templates_event ON badge_templates(event_id)",
+    # Organisations attendues à l'accueil : chaque organisation a son point de
+    # rendez-vous, son référent et une consigne affichée au participant.
+    # Un inscrit est rattaché à son organisation (participants.care_org) soit
+    # automatiquement à partir de son champ « organisation », soit par
+    # lui-même lors du self check-in.
+    """
+    CREATE TABLE IF NOT EXISTS event_orgs (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      desk TEXT NOT NULL DEFAULT '',
+      host TEXT NOT NULL DEFAULT '',
+      contact TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(event_id, name)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_event_orgs_event ON event_orgs(event_id, sort_order)",
     # Métadonnées locales du serveur (jamais restaurées depuis une sauvegarde).
     """
     CREATE TABLE IF NOT EXISTS app_meta (
@@ -1021,6 +1090,9 @@ EXPECTED_COLUMNS = {
         # restauré (le code badge reste réservé pendant ce temps).
         ("deleted_at", "TEXT"),
         ("deleted_by", "TEXT NOT NULL DEFAULT ''"),
+        # Organisation qui prend en charge l'inscrit (nom tel qu'il figure dans
+        # la liste des organisations du congrès). Vide = accueil général.
+        ("care_org", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -1480,6 +1552,8 @@ def participant_json(row: sqlite3.Row) -> dict:
         # uniquement par la liste de la corbeille, jamais par les autres écrans).
         "deletedAt": (row["deleted_at"] if "deleted_at" in row.keys() else "") or "",
         "deletedBy": (row["deleted_by"] if "deleted_by" in row.keys() else "") or "",
+        # Organisation qui prend en charge l'inscrit (vide = accueil général).
+        "careOrg": (row["care_org"] if "care_org" in row.keys() else "") or "",
     }
     data.update(payment_json(row))
     return data
@@ -1728,7 +1802,7 @@ def purge_event(event_id: str, user) -> dict:
         name = row["name"]
         con.execute("BEGIN IMMEDIATE")
         counts = {}
-        for table in ("sync_operations", "participants", "event_prices", "badge_templates"):
+        for table in ("sync_operations", "participants", "event_prices", "badge_templates", "event_orgs"):
             result = con.execute(f"DELETE FROM {table} WHERE event_id=?", (event_id,))
             counts[table] = max(0, int(result.rowcount or 0))
         con.execute("DELETE FROM events WHERE id=?", (event_id,))
@@ -1740,6 +1814,366 @@ def purge_event(event_id: str, user) -> dict:
         con.close()
     return {"purged": 1, "name": name, "participants": counts.get("participants", 0),
             "removed": {key: value for key, value in counts.items() if value}}
+
+
+# ═══════════ Organisations & prise en charge ═══════════
+# Chaque congrès tient la liste des organisations attendues à l'accueil. Un
+# inscrit y est rattaché automatiquement d'après le champ « organisation » de sa
+# fiche, ou par lui-même lors du self check-in. Le rattachement donne au
+# participant un point de rendez-vous, un référent et une consigne, et au desk
+# un compteur par organisation.
+#
+# Le rapprochement des libellés est local (aucun appel externe, aucun coût) :
+# normalisation (casse, accents, forme juridique) puis similarité de chaînes et
+# de mots. Un score élevé rattache directement, un score moyen propose un choix,
+# le reste laisse l'inscrit à l'accueil général.
+MAX_ORGS = 400
+
+# Mots qui ne distinguent pas deux organisations : formes juridiques, pays,
+# suffixes commerciaux. Ils sont ignorés pendant la comparaison.
+ORG_NOISE = {
+    "sa", "sarl", "suarl", "sas", "sasu", "gie", "ste", "societe", "societes", "cie", "compagnie",
+    "groupe", "group", "holding", "international", "internationale", "intl", "tunisie", "tunisia",
+    "tn", "ltd", "limited", "inc", "llc", "gmbh", "plc", "corp", "corporation", "company", "co",
+    "et", "and", "de", "du", "des", "la", "le", "les", "l", "d", "the", "of", "pour", "labo",
+    "laboratoire", "laboratoires", "pharma", "pharmaceuticals", "pharmaceutique", "distribution",
+}
+
+
+def org_norm(value: str) -> str:
+    """Minuscules, sans accents ni ponctuation, espaces normalisés."""
+    text = unicodedata.normalize("NFKD", unicodedata.normalize("NFKD", clean_text(value, 180)))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def org_key(value: str) -> str:
+    """Forme comparable : on retire les mots juridiques et les mots vides."""
+    tokens = [token for token in org_norm(value).split() if token and token not in ORG_NOISE]
+    return " ".join(tokens) or org_norm(value)
+
+
+def org_similarity(left: str, right: str) -> float:
+    """Score de 0 à 1 entre deux libellés d'organisation (calcul local)."""
+    a, b = org_key(left), org_key(right)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    # Chaîne complète : tolère les fautes de frappe et les libellés plus longs.
+    ratio = difflib.SequenceMatcher(None, a, b).ratio()
+    # Mots : tolère l'ordre et les mots ajoutés (« Pfizer Tunisie » vs « Pfizer »).
+    words_a, words_b = set(a.split()), set(b.split())
+    common = words_a & words_b
+    dice = (2 * len(common)) / (len(words_a) + len(words_b)) if words_a and words_b else 0.0
+    partial = max(
+        (difflib.SequenceMatcher(None, token, other).ratio() for token in words_a for other in words_b),
+        default=0.0,
+    )
+    return round(max(ratio, dice, partial * 0.95), 4)
+
+
+def org_json(row) -> dict:
+    return {
+        "id": row["id"], "name": row["name"],
+        "desk": row["desk"] or "", "host": row["host"] or "",
+        "contact": row["contact"] or "", "message": row["message"] or "",
+        "sortOrder": int(row["sort_order"] or 0), "active": bool(row["active"]),
+    }
+
+
+def orgs_public_json(row) -> dict:
+    """Ce qu'un participant a besoin de savoir : où aller, qui le prend en charge."""
+    return {"name": row["name"], "desk": row["desk"] or "", "host": row["host"] or "",
+            "contact": row["contact"] or "", "message": row["message"] or ""}
+
+
+def list_orgs(event_id: str) -> list[dict]:
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
+            (event_id,),
+        ).fetchall()
+        return [org_json(row) for row in rows]
+    finally:
+        con.close()
+
+
+def replace_orgs(event_id: str, raw, user=None) -> list[dict]:
+    """Remplace la liste des organisations d'un congrès en une transaction."""
+    if not isinstance(raw, list):
+        raise ValueError("La liste des organisations est invalide.")
+    if len(raw) > MAX_ORGS:
+        raise ValueError(f"Limitez la liste à {MAX_ORGS} organisations par congrès.")
+    cleaned, seen = [], set()
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = clean_text(item.get("name"), 180).strip()
+        if not name:
+            continue
+        key = org_key(name)
+        if key in seen:
+            continue  # même organisation écrite autrement : la première ligne gagne
+        seen.add(key)
+        cleaned.append({
+            "id": clean_text(item.get("id"), 100) or "org-" + uuid.uuid4().hex,
+            "name": name,
+            "desk": clean_text(item.get("desk"), 180),
+            "host": clean_text(item.get("host"), 120),
+            "contact": clean_text(item.get("contact"), 180),
+            "message": clean_text(item.get("message"), 400),
+            "sort_order": index,
+            "active": 0 if item.get("active") is False else 1,
+        })
+    con = connect()
+    try:
+        if not event_exists(con, event_id):
+            raise LookupError("Congrès introuvable.")
+        now = utc_now()
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DELETE FROM event_orgs WHERE event_id=?", (event_id,))
+        for org in cleaned:
+            con.execute(
+                "INSERT INTO event_orgs(id,event_id,name,desk,host,contact,message,sort_order,active,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (org["id"], event_id, org["name"], org["desk"], org["host"], org["contact"],
+                 org["message"], org["sort_order"], org["active"], now, now),
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return list_orgs(event_id)
+
+
+def orgs_from_participants(event_id: str) -> dict:
+    """Ajoute à la liste les organisations déjà présentes dans les fiches inscrits.
+
+    Les libellés voisins d'une même organisation (« Pfizer », « pfizer »,
+    « Pfizer Tunisie SA ») sont regroupés : on conserve l'écriture la plus
+    fréquente, à défaut la plus courte (la moins bruitée).
+    """
+    con = connect()
+    try:
+        if not event_exists(con, event_id):
+            raise LookupError("Congrès introuvable.")
+        existing = {org_key(row["name"]) for row in con.execute(
+            "SELECT name FROM event_orgs WHERE event_id=?", (event_id,))}
+        companies = con.execute(
+            "SELECT company, COUNT(*) AS n FROM participants "
+            "WHERE event_id=? AND deleted_at IS NULL AND TRIM(company)<>'' "
+            "GROUP BY company",
+            (event_id,),
+        ).fetchall()
+        # Regroupement par forme comparable, avec le meilleur libellé de chaque groupe.
+        groups: dict[str, dict] = {}
+        for row in companies:
+            raw = clean_text(row["company"], 180).strip()
+            key = org_key(raw)
+            if not key:
+                continue
+            entry = groups.setdefault(key, {"labels": {}})
+            entry["labels"][raw] = entry["labels"].get(raw, 0) + int(row["n"] or 0)
+        added, skipped = [], 0
+        now = utc_now()
+        order = con.execute(
+            "SELECT COALESCE(MAX(sort_order),0) AS n FROM event_orgs WHERE event_id=?", (event_id,)
+        ).fetchone()["n"]
+        # Libellé retenu : le plus fréquent, puis le plus court (le moins bruité).
+        chosen = {
+            key: sorted(group["labels"].items(), key=lambda item: (-item[1], len(item[0]), item[0]))[0][0]
+            for key, group in groups.items()
+        }
+        for key, name in sorted(chosen.items(), key=lambda item: org_norm(item[1])):
+            if key in existing:
+                skipped += 1
+                continue
+            existing.add(key)
+            order += 1
+            con.execute(
+                "INSERT INTO event_orgs(id,event_id,name,desk,host,contact,message,sort_order,active,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                ("org-" + uuid.uuid4().hex, event_id, name, "", "", "", "", order, 1, now, now),
+            )
+            added.append(name)
+        con.commit()
+    finally:
+        con.close()
+    return {"added": added, "skipped": skipped, "orgs": list_orgs(event_id)}
+
+
+def build_org_index(orgs: list[dict]) -> dict:
+    """Index de comparaison rapide : forme exacte + mots significatifs.
+
+    Évite de comparer chaque inscrit à chacune des organisations (coûteux sur
+    plusieurs milliers d'inscrits) : on ne calcule le score que pour les
+    organisations qui partagent au moins un mot significatif.
+    """
+    exact, by_token = {}, {}
+    for org in orgs:
+        key = org_key(org["name"])
+        if not key:
+            continue
+        exact.setdefault(key, org)
+        for token in key.split():
+            if len(token) >= 3:
+                by_token.setdefault(token, []).append(org)
+    return {"exact": exact, "by_token": by_token, "all": orgs}
+
+
+def best_org(name: str, orgs: list[dict], index: dict | None = None) -> tuple[dict | None, float, list[dict]]:
+    """Meilleure organisation pour un libellé, avec les propositions de secours."""
+    index = index or build_org_index(orgs)
+    key = org_key(name)
+    if not key:
+        return None, 0.0, []
+    exact = index["exact"].get(key)
+    if exact is not None:
+        return exact, 1.0, []
+    # Candidats : organisations partageant un mot significatif, sinon toutes.
+    candidates, seen = [], set()
+    for token in key.split():
+        for org in index["by_token"].get(token, []):
+            if org["id"] not in seen:
+                seen.add(org["id"])
+                candidates.append(org)
+    if not candidates:
+        if len(index["all"]) > 60:
+            return None, 0.0, []   # trop peu d'indices : on ne devine pas au hasard
+        candidates = index["all"]
+    scored = []
+    for org in candidates:
+        score = org_similarity(name, org["name"])
+        if score > 0:
+            scored.append((score, org))
+    scored.sort(key=lambda item: (-item[0], item[1]["name"]))
+    if not scored:
+        return None, 0.0, []
+    top_score, top_org = scored[0]
+    others = [{"name": org["name"], "score": score} for score, org in scored[1:4] if score >= ORG_WEAK_SCORE]
+    return (top_org if top_score >= ORG_STRONG_SCORE else None), top_score, others
+
+
+ORG_STRONG_SCORE = 0.82   # au-delà : rattachement automatique
+ORG_WEAK_SCORE = 0.45     # au-delà : l'organisation est proposée au participant
+
+
+def care_for_person(person_row, orgs: list[dict], index: dict | None = None) -> dict:
+    """Routage d'un inscrit : organisation déjà validée, sinon rapprochement auto."""
+    validated = clean_text(person_row["care_org"] if "care_org" in person_row.keys() else "", 180)
+    if validated:
+        index = index or build_org_index(orgs)
+        for org in orgs:
+            if org_key(org["name"]) == org_key(validated):
+                return {"org": orgs_public_json(org), "score": 1.0, "confirmed": True, "suggestions": []}
+        # Organisation retirée de la liste entre-temps : on ne bloque rien.
+    company = clean_text(person_row["company"], 180)
+    if not company:
+        return {"org": None, "score": 0.0, "confirmed": False, "suggestions": []}
+    org, score, suggestions = best_org(company, orgs, index)
+    return {
+        "org": orgs_public_json(org) if org else None,
+        "score": round(score, 3),
+        "confirmed": False,
+        "suggestions": [{"name": item["name"], "score": round(item["score"], 3)} for item in suggestions],
+    }
+
+
+def set_person_org(event_id: str, person_id: str, org_name: str, orgs: list[dict]) -> dict:
+    """Enregistre l'organisation qui prend en charge un inscrit."""
+    wanted = clean_text(org_name, 180)
+    matched = None
+    if wanted:
+        for org in orgs:
+            if org_norm(org["name"]) == org_norm(wanted):
+                matched = org
+                break
+        if matched is None:
+            matched, score, _ = best_org(wanted, orgs)
+            if matched is None or score < ORG_WEAK_SCORE:
+                raise ValueError("Cette organisation ne figure pas dans la liste du congrès.")
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT * FROM participants WHERE id=? AND event_id=? AND deleted_at IS NULL", (person_id, event_id)
+        ).fetchone()
+        if not row:
+            raise LookupError("Inscrit introuvable.")
+        if event_row_archived(con, event_id):
+            raise ValueError("Le check-in en ligne est fermé pour ce congrès.")
+        now = utc_now()
+        con.execute(
+            "UPDATE participants SET care_org=?,updated_at=? WHERE id=? AND event_id=?",
+            (matched["name"] if matched else "", now, person_id, event_id),
+        )
+        con.execute(
+            "INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) VALUES(?,?,?,?,?,?)",
+            ("op-" + uuid.uuid4().hex, event_id, person_id, "self-org",
+             json.dumps({"ok": True, "org": matched["name"] if matched else ""}, ensure_ascii=False,
+                        separators=(",", ":")), now),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return {"org": orgs_public_json(matched) if matched else None, "name": matched["name"] if matched else ""}
+
+
+def event_row_archived(con, event_id: str) -> bool:
+    row = con.execute("SELECT status FROM events WHERE id=?", (event_id,)).fetchone()
+    return bool(row) and row["status"] == "archived"
+
+
+def org_stats(event_id: str) -> list[dict]:
+    """Compteurs par organisation : inscrits rattachés, arrivées, rapprochements auto."""
+    con = connect()
+    try:
+        orgs = [org_json(row) for row in con.execute(
+            "SELECT * FROM event_orgs WHERE event_id=? ORDER BY sort_order, name COLLATE NOCASE", (event_id,)
+        )]
+        rows = con.execute(
+            "SELECT company, care_org, checked_in_at FROM participants "
+            "WHERE event_id=? AND deleted_at IS NULL", (event_id,)
+        ).fetchall()
+    finally:
+        con.close()
+    index = build_org_index(orgs)
+    counts = {org["id"]: {"total": 0, "arrived": 0, "auto": 0} for org in orgs}
+    by_id = {org["id"]: org for org in orgs}
+    for row in rows:
+        care = clean_text(row["care_org"], 180)
+        target = None
+        if care:
+            org, score, _ = best_org(care, orgs, index)
+            if org is not None and score >= ORG_STRONG_SCORE:
+                target, auto = org, False
+            elif org is None:
+                direct = index["exact"].get(org_key(care))
+                if direct is not None:
+                    target, auto = direct, False
+        if target is None:
+            company = clean_text(row["company"], 180)
+            if not company:
+                continue
+            org, score, _ = best_org(company, orgs, index)
+            if org is None or score < ORG_STRONG_SCORE:
+                continue
+            target, auto = org, True
+        if target["id"] in counts:
+            counts[target["id"]]["total"] += 1
+            counts[target["id"]]["arrived"] += 1 if row["checked_in_at"] else 0
+            if auto:
+                counts[target["id"]]["auto"] += 1
+    for org in orgs:
+        org.update(counts[org["id"]])
+    return orgs
 
 
 # ═══════════ Imagine Self Check-in ═══════════
@@ -1858,8 +2292,17 @@ def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
         if row is None:
             self_checkin_record_failure(bucket)
             raise LookupError("Aucun inscrit ne correspond à ce code ou à cet e-mail.")
+        # Prise en charge : l'organisation de la fiche est rapprochée de la liste
+        # des organisations du congrès (calcul local, insensible aux accents,
+        # à la casse et à la forme juridique).
+        orgs = [org_json(item) for item in con.execute(
+            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
+            (event_id,)).fetchall()]
+        care = care_for_person(row, orgs)
+        care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
         if row["checked_in_at"]:
             return {"ok": True, "already": True, "participant": self_public_participant(row),
+                    "participantId": row["id"], "care": care, "hasOrgs": bool(orgs),
                     "event": self_public_event(event), "counts": self_checkin_snapshot(con, event_id)}
         now = utc_now()
         con.execute(
@@ -1874,10 +2317,47 @@ def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
         con.commit()
         fresh = con.execute("SELECT * FROM participants WHERE id=?", (row["id"],)).fetchone()
         return {"ok": True, "already": False, "participant": self_public_participant(fresh),
+                "participantId": row["id"], "care": care, "hasOrgs": bool(orgs),
                 "event": self_public_event(event), "counts": self_checkin_snapshot(con, event_id)}
     except Exception:
         con.rollback()
         raise
+    finally:
+        con.close()
+
+
+def perform_self_care(token: str, participant_id: str, org_name: str, ip: str = "") -> dict:
+    """Le participant précise (ou corrige) son organisation depuis la page publique."""
+    bucket = f"{token}:care:{ip or 'anonyme'}"
+    self_checkin_throttle(bucket)
+    con = connect()
+    try:
+        event = self_event_by_token(con, token)
+        if not event:
+            raise LookupError("Ce lien de check-in n’est plus actif.")
+        if event["status"] == "archived":
+            raise ValueError("Le check-in en ligne est fermé pour ce congrès.")
+        event_id = event["id"]
+        orgs = [org_json(row) for row in con.execute(
+            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
+            (event_id,)).fetchall()]
+        if not orgs:
+            raise ValueError("Aucune organisation n’est encore définie pour ce congrès.")
+        person_id = clean_text(participant_id, 100)
+        if not person_id:
+            raise ValueError("Participant non reconnu : recommencez le check-in.")
+        try:
+            result = set_person_org(event_id, person_id, org_name, orgs)
+        except ValueError:
+            self_checkin_record_failure(bucket)
+            raise
+        row = con.execute(
+            "SELECT * FROM participants WHERE id=? AND event_id=?", (person_id, event_id)
+        ).fetchone()
+        care = care_for_person(row, orgs)
+        care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
+        return {"ok": True, "org": result["org"], "care": care,
+                "participant": self_public_participant(row), "hasOrgs": True}
     finally:
         con.close()
 
@@ -2479,8 +2959,8 @@ class Handler(BaseHTTPRequestHandler):
                         id,event_id,name,email,company,category,code,checked_in_at,
                         payment_status,payment_amount,payment_method,payment_reference,
                         payment_confirmed_at,payment_confirmed_by,created_at,updated_at,
-                        deleted_at,deleted_by
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        deleted_at,deleted_by,care_org
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (person_id, event_id, name, clean_text(item.get("email", ""), 180), clean_text(item.get("company", ""), 180),
                      clean_category(item.get("category", "participant")), code,
                      clean_text(item.get("checked_in_at", ""), 64) or None,
@@ -2490,7 +2970,7 @@ class Handler(BaseHTTPRequestHandler):
                      (clean_text(item.get("payment_confirmed_at", ""), 64) or now) if pay_status != "unpaid" else None,
                      clean_text(item.get("payment_confirmed_by", ""), 80) if pay_status != "unpaid" else "",
                      clean_text(item.get("created_at", ""), 64) or now, now,
-                     deleted_at, deleted_by),
+                     deleted_at, deleted_by, clean_text(item.get("care_org"), 180)),
                 )
             if "users" in tables:
                 for raw_user in source.execute("SELECT * FROM users"):
@@ -2599,6 +3079,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(200, {"events": [event_json(row) for row in rows], "serverTime": utc_now()})
             finally:
                 con.close()
+            return
+        match = re.fullmatch(r"/api/events/([^/]+)/orgs", path)
+        if match:
+            event_id = match.group(1)
+            con = connect()
+            try:
+                exists = event_exists(con, event_id)
+            finally:
+                con.close()
+            if not exists:
+                self.json(404, {"error": "Événement introuvable."})
+                return
+            self.json(200, {"ok": True, "eventId": event_id, "orgs": org_stats(event_id), "serverTime": utc_now()})
             return
         match = re.fullmatch(r"/api/events/([^/]+)/self-checkin", path)
         if match:
@@ -2719,6 +3212,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.logout()
                 return
 
+            self_care = re.fullmatch(r"/api/self/([A-Za-z0-9._-]{20,80})/care", path)
+            if self_care:
+                # Aucune session : le participant corrige lui-même sa prise en charge.
+                body = self.read_json()
+                try:
+                    self.json(200, perform_self_care(self_care.group(1), body.get("participantId", ""),
+                                                     body.get("org", ""), self.client_ip()))
+                except LookupError as exc:
+                    self.json(404, {"error": str(exc)})
+                except ValueError as exc:
+                    self.json(400, {"error": str(exc)})
+                return
             self_public = re.fullmatch(r"/api/self/([A-Za-z0-9._-]{20,80})/checkin", path)
             if self_public:
                 # Aucune session : le jeton du congrès fait foi (bornes et téléphones).
@@ -2755,6 +3260,20 @@ class Handler(BaseHTTPRequestHandler):
             if excel_match:
                 if not self.require_admin(user): return
                 self.import_excel(excel_match.group(1), user)
+                return
+            match = re.fullmatch(r"/api/events/([^/]+)/orgs/from-participants", path)
+            if match:
+                try:
+                    self.read_json()
+                except ValueError:
+                    pass  # corps vide accepté : l’action ne porte pas de données
+                try:
+                    result = orgs_from_participants(match.group(1))
+                    self.json(200, {"ok": True, "eventId": match.group(1), **result, "serverTime": utc_now()})
+                except LookupError as exc:
+                    self.json(404, {"error": str(exc)})
+                except ValueError as exc:
+                    self.json(400, {"error": str(exc)})
                 return
             match = re.fullmatch(r"/api/events/([^/]+)/self-checkin", path)
             if match:
@@ -2816,6 +3335,10 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/events/([^/]+)/badges", path)
             if match:
                 self.save_badge_templates(match.group(1), self.read_json())
+                return
+            match = re.fullmatch(r"/api/events/([^/]+)/orgs", path)
+            if match:
+                self.save_event_orgs(match.group(1), self.read_json())
                 return
             match = re.fullmatch(r"/api/events/([^/]+)/prices", path)
             if not match:
@@ -2904,6 +3427,21 @@ class Handler(BaseHTTPRequestHandler):
             return int(row["n"] or 0)
         finally:
             con.close()
+
+    def save_event_orgs(self, event_id, body):
+        """Enregistre la liste des organisations d'un congrès (ouvert à tous les comptes)."""
+        con = connect()
+        try:
+            event = con.execute("SELECT status FROM events WHERE id=? AND deleted_at IS NULL", (event_id,)).fetchone()
+        finally:
+            con.close()
+        if not event:
+            self.json(404, {"error": "Événement introuvable."})
+            return
+        if event["status"] == "archived":
+            raise ValueError("Ce congrès est archivé. Réactivez-le pour modifier ses organisations.")
+        orgs = replace_orgs(event_id, (body or {}).get("orgs"))
+        self.json(200, {"ok": True, "eventId": event_id, "orgs": org_stats(event_id)})
 
     def save_badge_templates(self, event_id, body):
         """Enregistre les modèles de badge d’un congrès (ouvert à tous les comptes)."""
