@@ -43,6 +43,14 @@ DEMO_ORGS = [
     ("Startup Village", "Village start-up · Hall C", "Sami Ayari", "sami.ayari@startup-village.tn", "Présentez-vous au village start-up avec votre badge."),
 ]
 
+# Grille tarifaire de démonstration : elle donne les montants affichés au
+# participant qui répond « non, je dois payer ».
+DEMO_PRICES = [
+    ("Participant — 2 nuits d’hôtel", "participant", 450.0),
+    ("Participant — 1 nuit d’hôtel", "participant", 300.0),
+    ("Participant — sans hébergement", "participant", 150.0),
+]
+
 # Lien public de démonstration (fictif) : /self/demo-self-checkin-2026
 DEMO_SELF_TOKEN = "demo-self-checkin-2026"
 
@@ -123,6 +131,18 @@ def main() -> int:
             )
             created_people += 1
 
+        # Grille tarifaire (idempotente).
+        created_prices = 0
+        for index, (label, category, amount) in enumerate(DEMO_PRICES, start=1):
+            if con.execute("SELECT 1 FROM event_prices WHERE event_id=? AND label=?", (event_id, label)).fetchone():
+                continue
+            con.execute(
+                "INSERT INTO event_prices(id,event_id,label,category,amount,active,sort_order,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (f"prc-demo-{index}", event_id, label, category, amount, 1, index, now, now),
+            )
+            created_prices += 1
+
         # Organisations & prise en charge (idempotent : rien n’est dupliqué).
         created_orgs = 0
         for index, (org_name, desk, host, contact, message) in enumerate(DEMO_ORGS, start=1):
@@ -155,7 +175,7 @@ def main() -> int:
 
     print(f"Base : {server.db_display_path()}")
     print(f"Comptes créés : {created_users} — Participants créés : {created_people} — Organisations créées : {created_orgs}")
-    print(f"Self check-in de démonstration : /self/{DEMO_SELF_TOKEN}")
+    print(f"Tarifs créés : {created_prices} — Self check-in : /self/{DEMO_SELF_TOKEN}")
     print("Comptes de démonstration :")
     for _, username, password, role in DEMO_USERS:
         print(f"  - {username} / {password} ({role})")

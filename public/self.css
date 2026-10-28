@@ -155,3 +155,30 @@ body{
   .self-care-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
 }
 .self-care-note{margin:2px 0 0;color:var(--muted);font-size:13.5px;font-weight:600}
+
+/* ── Paiement et prise en charge ───────────────────────────────────── */
+.self-pay{margin:16px 0 0;padding:18px 20px;border-radius:18px;border:1px solid var(--line);background:#FBFCFF;text-align:left}
+.self-pay-kicker{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.self-pay h2{margin:0;color:var(--navy);font-size:22px;font-weight:800;line-height:1.25}
+.self-pay-help{margin:8px 0 0;color:var(--ink);font-size:15px;line-height:1.5}
+.self-pay-ask{border-color:#C9D8EE;background:#F3F7FD}
+.self-pay-ask .self-pay-kicker{color:var(--navy2)}
+.self-pay-actions{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0}
+.self-pay-free,.self-pay-due{
+  flex:1 1 200px;border:0;border-radius:13px;padding:15px 16px;cursor:pointer;
+  font-family:inherit;font-size:16px;font-weight:800;
+}
+.self-pay-free{background:var(--green);color:#fff}
+.self-pay-free:hover{background:#0B6B4E}
+.self-pay-due{background:#fff;color:var(--navy);border:2px solid var(--line)}
+.self-pay-due:hover{border-color:#B9C7DA;background:#F7FAFD}
+.self-pay-free[disabled],.self-pay-due[disabled]{opacity:.6;cursor:progress}
+.self-pay-covered{border-color:#BFE6D6;background:var(--green-soft)}
+.self-pay-covered .self-pay-kicker{color:var(--green)}
+.self-pay-owed{border-color:#F3D9A4;background:var(--amber-soft)}
+.self-pay-owed .self-pay-kicker{color:var(--amber)}
+.self-pay-prices{margin:12px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.self-pay-prices li{display:flex;justify-content:space-between;gap:12px;padding:9px 12px;border-radius:11px;background:rgba(255,255,255,.8);font-size:14.5px}
+.self-pay-prices strong{color:var(--navy);white-space:nowrap}
+.self-pay-change{display:block;margin:12px 0 0;padding:0;border:0;background:none;cursor:pointer;font-family:inherit;color:var(--navy);font-size:13.5px;font-weight:700;text-decoration:underline}
+@media(max-width:560px){.self-pay{padding:15px 15px}.self-pay h2{font-size:19px}.self-pay-actions{flex-direction:column}.self-pay-free,.self-pay-due{flex:1 1 auto;width:100%}}
