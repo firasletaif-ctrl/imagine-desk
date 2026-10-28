@@ -588,3 +588,4 @@ body.rush-open{overflow:hidden}
 .self-panel-orgs span{flex:1;min-width:180px}
 .self-panel-orgs .btn{flex:none}
 @media(max-width:720px){.self-panel-orgs{flex-wrap:wrap}.self-panel-orgs .btn{width:100%}}
+.self-care-note{margin:2px 0 0;color:#5A6B85;font-size:13.5px;font-weight:600}

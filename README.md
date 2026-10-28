@@ -88,17 +88,25 @@ self check-in, **où aller** et **qui le prend en charge**.
    **référent** (la personne qui prend en charge), **contact**, et une **consigne** affichée au
    participant (« rendez-vous à 9h au stand »). Décochez **Active** pour la retirer du self check-in
    sans la supprimer ; les flèches changent l’ordre d’affichage.
-4. Au self check-in, l’organisation de la fiche est **rapprochée automatiquement** de la liste :
-   la casse, les accents, la forme juridique (« SA », « SARL »), les mots en trop (« Laboratoires
-   Nutricia », « Bureau d’études STCCCV ») et les petites fautes de frappe sont ignorés
-   (`Pfitzer` → **Pfizer**, `SANOFI-AVENTIS` → **Sanofi**).
-5. La page publique affiche alors le nom, le **point d’accueil**, le **référent**, le contact et la
-   consigne ; si le rapprochement est incertain, elle propose les organisations les plus proches et
+4. Au self check-in, l’inscrit est **rapproché automatiquement** de la liste, dans cet ordre :
+   **a)** l’e-mail du participant correspond à un **e-mail de référent** saisi sur une organisation
+   (ou partage son domaine : `hedi.zaidi@pfizer.tn` → **Pfizer** grâce à `nadia@pfizer.tn`) ;
+   **b)** l’« organisation » de sa fiche correspond au nom d’une organisation ;
+   **c)** à défaut, le **domaine de son e-mail** désigne une organisation (`sonia@sanofi.tn` →
+   **Sanofi**), sauf messagerie grand public (`gmail`, `yahoo`, `hotmail`, `orange`, `topnet`…), qui
+   ne dit rien de l’employeur. Dans tous les cas, la casse, les accents, la forme juridique
+   (« SA », « SARL »), les mots en trop (« Laboratoires Nutricia », « Bureau d’études STCCCV ») et
+   les petites fautes de frappe sont ignorés (`Pfitzer` → **Pfizer**, `SANOFI-AVENTIS` → **Sanofi**).
+5. La page publique affiche alors **« Vous êtes pris en charge »** avec le nom, le **point d’accueil**,
+   le **référent**, le contact et la consigne ; si le rapprochement est incertain, elle propose les organisations les plus proches et
    la liste complète, et le participant **choisit ou corrige** lui-même. Le choix est enregistré sur
    sa fiche (`care_org`) et visible au desk.
 
 Points à connaître :
 
+- **Renseignez l’e-mail du référent** dans la colonne *Contact* : c’est l’indice le plus sûr, il
+  reconnaît aussi les collègues du même domaine. Sans aucun e-mail et sans organisation sur la fiche,
+  le participant choisit lui-même dans la liste (rien n’est inventé).
 - **Calcul 100 % local** (bibliothèque standard Python, aucune API payante, aucun appel réseau) :
   comparable à la casse et aux accents, score de similarité, seuil de reconnaissance automatique
   **0,82** et seuil de proposition **0,45**.

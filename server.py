@@ -1554,6 +1554,7 @@ def participant_json(row: sqlite3.Row) -> dict:
         "deletedBy": (row["deleted_by"] if "deleted_by" in row.keys() else "") or "",
         # Organisation qui prend en charge l'inscrit (vide = accueil général).
         "careOrg": (row["care_org"] if "care_org" in row.keys() else "") or "",
+        "emailDomain": email_domain(row["email"] if "email" in row.keys() else ""),
     }
     data.update(payment_json(row))
     return data
@@ -2062,6 +2063,91 @@ def best_org(name: str, orgs: list[dict], index: dict | None = None) -> tuple[di
 ORG_STRONG_SCORE = 0.82   # au-delà : rattachement automatique
 ORG_WEAK_SCORE = 0.45     # au-delà : l'organisation est proposée au participant
 
+# Messageries grand public : le domaine n'y dit rien de l'employeur.
+FREE_MAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.fr", "yahoo.com", "yahoo.co.uk", "hotmail.fr", "hotmail.com",
+    "hotmail.it", "outlook.com", "outlook.fr", "live.fr", "live.com", "live.it", "msn.com", "aol.com",
+    "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "gmx.fr", "gmx.com", "web.de",
+    "free.fr", "orange.fr", "wanadoo.fr", "laposte.net", "sfr.fr", "bbox.fr", "numericable.fr",
+    "topnet.tn", "gnet.tn", "planet.tn", "email.tn", "hexabyte.tn", "inbox.com", "yopmail.com",
+}
+# Suffixes de domaine qui ne désignent pas l'organisation elle-même.
+DOMAIN_SUFFIXES = {"com", "tn", "fr", "net", "org", "co", "gov", "gouv", "info", "biz", "eu", "ma", "dz"}
+
+
+def email_domain(value: str) -> str:
+    """Domaine d'une adresse e-mail, en minuscules (« nadia@Pfizer.TN » → « pfizer.tn »)."""
+    text = clean_text(value, 180).strip().lower()
+    if "@" not in text:
+        return ""
+    return re.sub(r"[^a-z0-9.-]", "", text.rsplit("@", 1)[1]).strip(".")
+
+
+def emails_in(value: str) -> list[str]:
+    """Toutes les adresses e-mail contenues dans un texte libre (champ contact)."""
+    return [match.lower() for match in re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", clean_text(value, 180))]
+
+
+def email_org_match(email: str, orgs: list[dict], index: dict | None = None) -> tuple[dict | None, float]:
+    """Reconnaît une organisation d'après le domaine d'une adresse e-mail.
+
+    « sonia@sanofi.tn » → Sanofi, dès lors que le domaine n'est pas une messagerie
+    grand public et que la ressemblance est franche. Calcul local, aucun réseau.
+    """
+    domain = email_domain(email)
+    if not domain or domain in FREE_MAIL_DOMAINS:
+        return None, 0.0
+    index = index or build_org_index(orgs)
+    labels = [part for part in domain.split(".") if part and part not in DOMAIN_SUFFIXES]
+    candidates = [domain.replace(".", " ").replace("-", " ")]
+    if labels:
+        candidates.append(labels[0].replace("-", " "))
+    best, best_score = None, 0.0
+    for candidate in candidates:
+        if not candidate.strip():
+            continue
+        org, score, _ = best_org(candidate, orgs, index)
+        if org is not None and score > best_score:
+            best, best_score = org, score
+    return (best, best_score) if best is not None and best_score >= ORG_STRONG_SCORE else (None, 0.0)
+
+
+def care_match(person_row, orgs: list[dict], index: dict | None = None) -> tuple[dict | None, float, str]:
+    """Organisation qui prend en charge un inscrit, sans intervention humaine.
+
+    Trois indices, du plus sûr au plus large : l'adresse du référent saisie sur
+    l'organisation, l'« organisation » de la fiche inscrit, puis le domaine de
+    l'adresse e-mail du participant. Renvoie (organisation, score, origine).
+    """
+    def value(column: str) -> str:
+        return clean_text(person_row[column] if column in person_row.keys() else "", 180)
+
+    index = index or build_org_index(orgs)
+    email = value("email").strip().lower()
+    if email:
+        # 1. L'adresse du référent est exactement celle du participant…
+        for org in orgs:
+            if email in emails_in(org.get("contact", "")):
+                return org, 1.0, "contact"
+        # … ou son domaine est celui du référent (« @pfizer.tn »).
+        domain = email_domain(email)
+        if domain and domain not in FREE_MAIL_DOMAINS:
+            for org in orgs:
+                if any(email_domain(contact) == domain for contact in emails_in(org.get("contact", ""))):
+                    return org, 0.95, "contact"
+    # 2. L'organisation saisie sur la fiche (« Pfizer Tunisie SA »).
+    company = value("company")
+    if company:
+        org, score, _ = best_org(company, orgs, index)
+        if org is not None and score >= ORG_STRONG_SCORE:
+            return org, score, "company"
+    # 3. Le domaine de l'adresse e-mail (les fiches importées sans organisation).
+    if email:
+        org, score = email_org_match(email, orgs, index)
+        if org is not None:
+            return org, score, "email"
+    return None, 0.0, ""
+
 
 def care_for_person(person_row, orgs: list[dict], index: dict | None = None) -> dict:
     """Routage d'un inscrit : organisation déjà validée, sinon rapprochement auto."""
@@ -2072,14 +2158,21 @@ def care_for_person(person_row, orgs: list[dict], index: dict | None = None) -> 
             if org_key(org["name"]) == org_key(validated):
                 return {"org": orgs_public_json(org), "score": 1.0, "confirmed": True, "suggestions": []}
         # Organisation retirée de la liste entre-temps : on ne bloque rien.
+    index = index or build_org_index(orgs)
+    org, score, source = care_match(person_row, orgs, index)
+    if org is not None:
+        return {"org": orgs_public_json(org), "score": round(score, 3), "confirmed": False,
+                "source": source, "suggestions": []}
+    # Aucun rapprochement fiable : on propose les noms les plus proches.
     company = clean_text(person_row["company"], 180)
-    if not company:
-        return {"org": None, "score": 0.0, "confirmed": False, "suggestions": []}
-    org, score, suggestions = best_org(company, orgs, index)
+    email = clean_text(person_row["email"], 180)
+    probe = company or email_domain(email).split(".")[0] if (company or email) else ""
+    _, _, suggestions = best_org(probe, orgs, index) if probe else (None, 0.0, [])
     return {
-        "org": orgs_public_json(org) if org else None,
+        "org": None,
         "score": round(score, 3),
         "confirmed": False,
+        "source": "",
         "suggestions": [{"name": item["name"], "score": round(item["score"], 3)} for item in suggestions],
     }
 
@@ -2139,7 +2232,7 @@ def org_stats(event_id: str) -> list[dict]:
             "SELECT * FROM event_orgs WHERE event_id=? ORDER BY sort_order, name COLLATE NOCASE", (event_id,)
         )]
         rows = con.execute(
-            "SELECT company, care_org, checked_in_at FROM participants "
+            "SELECT company, email, care_org, checked_in_at FROM participants "
             "WHERE event_id=? AND deleted_at IS NULL", (event_id,)
         ).fetchall()
     finally:
@@ -2159,10 +2252,7 @@ def org_stats(event_id: str) -> list[dict]:
                 if direct is not None:
                     target, auto = direct, False
         if target is None:
-            company = clean_text(row["company"], 180)
-            if not company:
-                continue
-            org, score, _ = best_org(company, orgs, index)
+            org, score, _source = care_match(row, orgs, index)
             if org is None or score < ORG_STRONG_SCORE:
                 continue
             target, auto = org, True

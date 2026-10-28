@@ -154,3 +154,4 @@ body{
   .self-care-yes{width:100%}
   .self-care-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
 }
+.self-care-note{margin:2px 0 0;color:var(--muted);font-size:13.5px;font-weight:600}

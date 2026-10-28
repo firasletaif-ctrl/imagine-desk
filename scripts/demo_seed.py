@@ -33,14 +33,14 @@ DEMO_EVENT = ("evt-demo-automne", "Congrès d’automne 2026", "2026-11-12", "H�
 # Elles correspondent aux organisations des fiches inscrits : au self check-in, le
 # rapprochement est automatique et le participant voit où aller.
 DEMO_ORGS = [
-    ("Entreprise Exemple", "Stand 12 · Hall B", "Nadia Ben Amor", "+216 22 111 222", "Rendez-vous au stand à 9h pour la visite guidée."),
-    ("Groupe Medina", "Stand 7 · Hall A", "Walid Chaabane", "+216 71 656 056", ""),
-    ("Université de Tunis", "Comptoir 3", "Leïla Mejri", "", "Les intervenants sont attendus en salle 2 à 8h45."),
+    ("Entreprise Exemple", "Stand 12 · Hall B", "Nadia Ben Amor", "nadia.benamor@entreprise-exemple.tn · +216 22 111 222", "Rendez-vous au stand à 9h pour la visite guidée."),
+    ("Groupe Medina", "Stand 7 · Hall A", "Walid Chaabane", "walid.chaabane@groupe-medina.tn · +216 71 656 056", ""),
+    ("Université de Tunis", "Comptoir 3", "Leïla Mejri", "leila.mejri@universite-tunis.tn", "Les intervenants sont attendus en salle 2 à 8h45."),
     ("TechLab", "Stand 21", "", "", ""),
-    ("Media Plus", "Salle de presse · 1er étage", "Ines Barkia", "+216 22 902 824", "Accréditation à retirer à la salle de presse."),
+    ("Media Plus", "Salle de presse · 1er étage", "Ines Barkia", "ines.barkia@media-plus.tn · +216 22 902 824", "Accréditation à retirer à la salle de presse."),
     ("Cabinet Nord", "Accueil général", "", "", ""),
-    ("Imagine Events", "Bureau organisateur", "Équipe Imagine", "+216 71 656 056", "Badge équipe à retirer au bureau organisateur."),
-    ("Startup Village", "Village start-up · Hall C", "Sami Ayari", "", "Présentez-vous au village start-up avec votre badge."),
+    ("Imagine Events", "Bureau organisateur", "Équipe Imagine", "accueil@imagine-events.tn · +216 71 656 056", "Badge équipe à retirer au bureau organisateur."),
+    ("Startup Village", "Village start-up · Hall C", "Sami Ayari", "sami.ayari@startup-village.tn", "Présentez-vous au village start-up avec votre badge."),
 ]
 
 # Lien public de démonstration (fictif) : /self/demo-self-checkin-2026
@@ -56,6 +56,9 @@ DEMO_PEOPLE = [
     ("Youssef Ferchichi", "youssef.f@example.tn", "Cabinet Nord", "participant", "unpaid", 0, "", "", "", ""),
     ("Nour El Abed", "nour.elabed@example.tn", "Imagine Events", "team", "exempt", 0, "", "", "08:45", "demo.accueil"),
     ("Rania Chaabane", "rania.chaabane@example.tn", "Startup Village", "participant", "paid", 120.5, "mobile", "D17-889", "10:18", "desk.accueil"),
+    # Fiches sans organisation : la reconnaissance se fait par le domaine de l'e-mail.
+    ("Hedi Zaidi", "hedi.zaidi@groupe-medina.tn", "", "participant", "unpaid", 0, "", "", "", ""),
+    ("Ines Trabelsi", "ines.trabelsi@media-plus.tn", "", "press", "exempt", 0, "", "", "", ""),
 ]
 
 
