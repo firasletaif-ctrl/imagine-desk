@@ -2049,7 +2049,7 @@ function orgRowHTML(org={}){
     <div class="org-row-fields">
       <input class="org-input" data-org-field="desk" type="text" maxlength="180" value="${esc(org.desk||'')}" placeholder="Où aller : stand 12 · hall B, comptoir 3…" aria-label="Point d’accueil">
       <input class="org-input" data-org-field="host" type="text" maxlength="120" value="${esc(org.host||'')}" placeholder="Référent qui prend en charge" aria-label="Référent">
-      <input class="org-input" data-org-field="contact" type="text" maxlength="180" value="${esc(org.contact||'')}" placeholder="Téléphone ou e-mail du référent" aria-label="Contact">
+      <input class="org-input" data-org-field="contact" type="text" maxlength="180" value="${esc(org.contact||'')}" placeholder="Téléphone ou e-mail du référent (recommandé)" aria-label="Contact">
       <input class="org-input org-message" data-org-field="message" type="text" maxlength="400" value="${esc(org.message||'')}" placeholder="Consigne affichée au participant (ex. rendez-vous à 9h au stand)" aria-label="Consigne">
     </div>
     <div class="org-row-foot">${orgStatLine(org.id)}</div>
@@ -2070,7 +2070,8 @@ function renderOrgsPanel(orgs){
     <div class="orgs-guide">
       <div class="orgs-guide-step"><b>1</b><div><strong>Écrivez la liste ici</strong><span>Une ligne par organisation : nom, puis point d’accueil, référent, contact et consigne. Rien n’est enregistré tant que vous n’appuyez pas sur <em>Enregistrer les organisations</em>.</span></div></div>
       <div class="orgs-guide-step"><b>2</b><div><strong>Ou reprenez vos inscrits</strong><span>Le bouton <em>Reprendre depuis les participants</em> remplit la liste avec les organisations déjà saisies sur les fiches — vous n’avez plus qu’à compléter les stands.</span></div></div>
-      <div class="orgs-guide-step"><b>3</b><div><strong>C’est tout</strong><span>Au self check-in, le participant voit où aller et qui le prend en charge. Aucune autre manipulation n’est nécessaire.</span></div></div>
+      <div class="orgs-guide-step"><b>3</b><div><strong>Laissez un e-mail de référent</strong><span>Le plus sûr : renseignez l’e-mail du référent (ou d’un contact de l’organisation). Le participant est alors reconnu par son adresse e-mail <strong>et</strong> par l’organisation de sa fiche. Sans e-mail, la reconnaissance se fait uniquement sur le nom de l’organisation écrit sur la fiche.</span></div></div>
+      <div class="orgs-guide-step"><b>4</b><div><strong>C’est tout</strong><span>Au self check-in, le participant voit où aller et qui le prend en charge. Aucune autre manipulation n’est nécessaire.</span></div></div>
     </div>
     <p class="orgs-intro">Au self check-in, l’organisation inscrite sur la fiche du participant est rapprochée de cette liste (majuscules, accents, « SA », « SARL » et petites fautes de frappe sont ignorés). Le participant voit alors <strong>où aller</strong> et <strong>qui le prend en charge</strong>. Il peut aussi corriger lui-même son organisation.</p>
     <div class="orgs-toolbar">

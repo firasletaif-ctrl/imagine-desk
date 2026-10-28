@@ -82,10 +82,10 @@
       '</div>' +
       (message ? '<div class="self-notice" role="status">' + message + '</div>' : '') +
       '<form class="self-form" id="selfForm" novalidate>' +
-        '<label class="self-label" for="selfQuery">Votre code badge ou votre e-mail d’inscription</label>' +
+        '<label class="self-label" for="selfQuery">Votre code badge ou votre e-mail</label>' +
         '<input class="self-input" id="selfQuery" name="query" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="180" placeholder="IE-1001" required>' +
         '<button class="self-submit" id="selfSubmit" type="submit">Je confirme mon arrivée</button>' +
-        '<p class="self-help">Le code se trouve sur votre badge ou dans votre e-mail de confirmation. Nous vous indiquons ensuite <strong>où aller</strong> et <strong>qui vous prend en charge</strong>. En cas de difficulté, l’accueil vous enregistre sur place.</p>' +
+        '<p class="self-help">Le code se trouve sur votre badge. Vous pouvez aussi saisir votre <strong>e-mail d’inscription</strong> : nous vous disons ensuite <strong>où aller</strong> et <strong>qui vous prend en charge</strong>. En cas de difficulté, l’accueil vous enregistre sur place.</p>' +
       '</form>' +
       progressHtml();
     var input = document.getElementById('selfQuery');
@@ -110,10 +110,17 @@
     return !state.careSkipped && (state.care.choices || []).length > 0;
   }
 
-  function careCardHtml(org, confirmed) {
+  var CARE_SOURCES = {
+    contact: 'D’après votre adresse e-mail,',
+    email: 'D’après votre adresse e-mail,',
+    company: 'D’après votre inscription,'
+  };
+
+  function careCardHtml(org, confirmed, source) {
     return '' +
       '<div class="self-care ' + (confirmed ? 'self-care-confirmed' : 'self-care-suggested') + '">' +
-        '<p class="self-care-kicker">' + (confirmed ? 'Votre prise en charge' : 'Organisation reconnue') + '</p>' +
+        '<p class="self-care-kicker">' + (confirmed ? 'Vous êtes pris en charge' : 'Organisation reconnue') + '</p>' +
+        (CARE_SOURCES[source] ? '<p class="self-care-note">' + escapeHtml(CARE_SOURCES[source]) + ' vous êtes rattaché à cette organisation.</p>' : '') +
         '<h2 class="self-care-name">' + escapeHtml(org.name) + '</h2>' +
         (org.desk ? '<p class="self-care-line self-care-desk"><span>Où aller</span><strong>' + escapeHtml(org.desk) + '</strong></p>' : '') +
         (org.host ? '<p class="self-care-line"><span>Qui vous prend en charge</span><strong>' + escapeHtml(org.host) + '</strong></p>' : '') +
@@ -140,8 +147,8 @@
         return '' +
           '<div class="self-care self-care-pick">' +
             '<p class="self-care-kicker">Prise en charge</p>' +
-            '<h2>Qui vous accueille ?</h2>' +
-            '<p class="self-care-help">Indiquez l’organisation qui vous prend en charge : nous vous dirons où aller.</p>' +
+            '<h2>Qui vous prend en charge ?</h2>' +
+            '<p class="self-care-help">Nous n’avons pas reconnu votre organisation automatiquement. Indiquez-la : nous vous dirons où aller.</p>' +
             '<div class="self-care-suggests">' +
               suggestions.map(function (item) {
                 return '<button type="button" data-self-care-pick="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</button>';
@@ -152,11 +159,14 @@
             error +
           '</div>';
       }
+      var unmatched = !org && !suggestions.length && !state.careOpen;
       return '' +
         '<div class="self-care self-care-pick">' +
           '<p class="self-care-kicker">Prise en charge</p>' +
-          '<h2>Choisissez votre organisation</h2>' +
-          '<p class="self-care-help">Touchez le nom de l’organisation qui vous prend en charge.</p>' +
+          '<h2>' + (unmatched ? 'Qui vous prend en charge ?' : 'Choisissez votre organisation') + '</h2>' +
+          '<p class="self-care-help">' + (unmatched
+            ? 'Nous n’avons pas reconnu votre organisation automatiquement. Touchez la vôtre : nous vous dirons où aller.'
+            : 'Touchez le nom de l’organisation qui vous prend en charge.') + '</p>' +
           '<div class="self-care-grid">' +
             choices.map(function (item) {
               return '<button type="button" data-self-care-pick="' + escapeHtml(item.name) + '">' +
@@ -169,7 +179,7 @@
           error +
         '</div>';
     }
-    if (org) return careCardHtml(org, !!care.confirmed) + error;
+    if (org) return careCardHtml(org, !!care.confirmed, care.source) + error;
     if (state.careSkipped) {
       return '' +
         '<div class="self-care self-care-general">' +
