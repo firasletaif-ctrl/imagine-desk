@@ -56,6 +56,7 @@ function icon(name,size=16){
     x:'<path d="m18 6-12 12M6 6l12 12"/>',
     cloud:'<path d="M20 16.2A4.5 4.5 0 0 0 18 7.5a6 6 0 0 0-11.3 1.8A3.7 3.7 0 0 0 7 16.6h11"/><path d="m12 12-3 3m3-3 3 3m-3-3v8"/>',
     file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/>',
+    cluster:'<circle cx="12" cy="6" r="3"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M12 9v3M12 12 6.8 15.6M12 12l5.2 3.6"/>',
     cash:'<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
     trash:'<path d="M4 7h16M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v5M14 11v5"/>',
     rotate:'<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>',
@@ -205,7 +206,7 @@ function renderPeople(){
   const trash=trashCount();
   const archived=getEvent()?.status==='archived';
   return `${pendingTotal()?noticeHTML('warning',`<strong>${pendingTotal()} action(s) hors ligne en attente.</strong> Elles seront synchronisées à la reconnexion.`):''}
-  <div class="toolbar"><div class="search-wrap">${icon('search')}<input id="peopleSearch" class="search-input" value="${esc(peopleQuery)}" autocomplete="off" placeholder="Nom, e-mail, organisation ou code badge…" aria-label="Rechercher un participant"></div><span class="count-label" id="peopleCount"></span><button class="btn btn-secondary btn-sm rush-button" type="button" data-action="open-rush" ${archived?'disabled':''}>${icon('bolt',13)}Mode rush</button><button class="btn btn-secondary btn-sm trash-button" type="button" data-action="open-trash">${icon('trash',14)}Corbeille${trash?`<b class="trash-count">${trash}</b>`:''}</button></div>
+  <div class="toolbar"><div class="search-wrap">${icon('search')}<input id="peopleSearch" class="search-input" value="${esc(peopleQuery)}" autocomplete="off" placeholder="Nom, e-mail, organisation ou code badge…" aria-label="Rechercher un participant"></div><span class="count-label" id="peopleCount"></span><button class="btn btn-secondary btn-sm rush-button" type="button" data-action="open-rush" ${archived?'disabled':''}>${icon('bolt',13)}Mode rush</button><button class="btn btn-secondary btn-sm" type="button" data-action="open-orgs" ${archived?'disabled':''}>${icon('cluster',13)}Organisations</button><button class="btn btn-secondary btn-sm trash-button" type="button" data-action="open-trash">${icon('trash',14)}Corbeille${trash?`<b class="trash-count">${trash}</b>`:''}</button></div>
   <div class="filters">${filters.map(([id,label,count])=>`<button class="filter ${peopleFilter===id?'active':''}" type="button" data-filter="${id}">${label}<b>${count}</b></button>`).join('')}</div>
   <div class="selection-bar" id="selectionBar" hidden><span id="selectionCount"></span><div class="selection-actions"><button class="btn btn-secondary btn-sm" type="button" data-action="clear-selection">Annuler la sélection</button><button class="btn btn-danger btn-sm" type="button" data-action="trash-selected" ${archived?'disabled':''}>${icon('trash',12)}Mettre à la corbeille</button></div></div>
   <section class="table-card"><div class="table-scroll"><table><thead><tr><th class="check-col"><input type="checkbox" id="peopleSelectAll" aria-label="Sélectionner tous les inscrits affichés"></th><th>Participant</th><th>Catégorie</th><th>Code badge</th><th>Statut</th><th>Paiement</th><th>Heure</th><th style="text-align:right">Actions</th></tr></thead><tbody id="peopleRows"></tbody></table></div></section>
@@ -1932,6 +1933,7 @@ function renderSelfCheckinPanel(config){
       <span class="self-panel-counts">${counts.arrived} arrivée${counts.arrived===1?'':'s'} sur ${counts.total} inscrit${counts.total===1?'':'s'}</span>
     </div>
     <p class="self-panel-intro">Vos participants confirment eux-mêmes leur arrivée depuis leur téléphone ou une borne, en saisissant leur code badge ou leur e-mail. Les arrivées remontent <strong>en direct</strong> dans le desk, y compris en mode rush.</p>
+    <div class="self-panel-orgs">${icon('cluster',14)}<span>Après sa confirmation, le participant voit <strong>où aller</strong> et <strong>qui le prend en charge</strong> : cela vient de la liste des organisations du congrès.</span><button class="btn btn-secondary btn-sm" type="button" data-action="open-orgs">${icon('cluster',12)}Organisations</button></div>
     ${enabled?`
       <div class="self-link-row">
         <input class="self-link-input" id="selfCheckinLink" type="text" readonly value="${esc(url)}" aria-label="Lien public du self check-in">
@@ -2065,6 +2067,11 @@ function renderOrgsPanel(orgs){
       <div class="orgs-summary-main"><strong>${(orgs||[]).length}</strong><span>organisation${(orgs||[]).length===1?'':'s'} dans ce congrès</span></div>
       <div class="orgs-summary-counts"><span>${total} inscrit${total===1?'':'s'} rattaché${total===1?'':'s'}</span><span>${auto} rapprochement${auto===1?'':'s'} automatique${auto===1?'':'s'}</span><span>${arrived} arrivée${arrived===1?'':'s'}</span></div>
     </div>
+    <div class="orgs-guide">
+      <div class="orgs-guide-step"><b>1</b><div><strong>Écrivez la liste ici</strong><span>Une ligne par organisation : nom, puis point d’accueil, référent, contact et consigne. Rien n’est enregistré tant que vous n’appuyez pas sur <em>Enregistrer les organisations</em>.</span></div></div>
+      <div class="orgs-guide-step"><b>2</b><div><strong>Ou reprenez vos inscrits</strong><span>Le bouton <em>Reprendre depuis les participants</em> remplit la liste avec les organisations déjà saisies sur les fiches — vous n’avez plus qu’à compléter les stands.</span></div></div>
+      <div class="orgs-guide-step"><b>3</b><div><strong>C’est tout</strong><span>Au self check-in, le participant voit où aller et qui le prend en charge. Aucune autre manipulation n’est nécessaire.</span></div></div>
+    </div>
     <p class="orgs-intro">Au self check-in, l’organisation inscrite sur la fiche du participant est rapprochée de cette liste (majuscules, accents, « SA », « SARL » et petites fautes de frappe sont ignorés). Le participant voit alors <strong>où aller</strong> et <strong>qui le prend en charge</strong>. Il peut aussi corriger lui-même son organisation.</p>
     <div class="orgs-toolbar">
       <button class="btn btn-secondary btn-sm" type="button" data-action="org-add">${icon('plus',13)}Ajouter une organisation</button>
@@ -2072,6 +2079,7 @@ function renderOrgsPanel(orgs){
       <span class="orgs-hint">${total?'':'Importez d’abord des inscrits : leurs organisations deviendront la liste de départ.'}</span>
     </div>
     <div class="org-rows" id="orgRows">${(orgs||[]).length?(orgs||[]).map(orgRowHTML).join(''):orgRowHTML({})}</div>
+    <p class="orgs-empty-note">${(orgs||[]).length?'':'<strong>La liste est vide.</strong> Remplissez la ligne ci-dessus (seul le nom est obligatoire), puis appuyez sur <em>Enregistrer les organisations</em>.'}</p>
     <div class="notice" style="margin-top:12px">${icon('info')}<span>Les compteurs « rapprochements auto » indiquent les inscrits dont l’organisation a été reconnue automatiquement. Liste et consignes sont partagées entre tous les postes connectés.</span></div>
   </div>
   <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-primary" type="submit">${icon('check')}Enregistrer les organisations</button></div></form>`;

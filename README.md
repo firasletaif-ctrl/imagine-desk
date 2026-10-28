@@ -78,7 +78,9 @@ Points à connaître :
 Chaque congrès tient sa **liste d’organisations** : c’est elle qui dit au participant, dès son
 self check-in, **où aller** et **qui le prend en charge**.
 
-1. **Vue générale → Organisations** (ouvert à tous les comptes, comme la grille tarifaire).
+1. **Organisations** — trois entrées, toutes ouvertes à **tous les comptes** (comme la grille
+   tarifaire) : le **menu de gauche**, le bouton **Organisations** de la page *Participants*, ou
+   l’en-tête du congrès sur *Vue générale*.
 2. **Reprendre depuis les participants** crée la liste de départ à partir des organisations déjà
    saisies sur les fiches inscrits : « Pfizer », « pfizer » et « Pfizer Tunisie SA » donnent **une
    seule** ligne. Les compteurs indiquent combien d’inscrits chaque ligne a déjà regroupés.
