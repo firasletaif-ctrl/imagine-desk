@@ -97,8 +97,8 @@ self check-in, **où aller** et **qui le prend en charge**.
    ne dit rien de l’employeur. Dans tous les cas, la casse, les accents, la forme juridique
    (« SA », « SARL »), les mots en trop (« Laboratoires Nutricia », « Bureau d’études STCCCV ») et
    les petites fautes de frappe sont ignorés (`Pfitzer` → **Pfizer**, `SANOFI-AVENTIS` → **Sanofi**).
-5. La page publique affiche alors **« Vous êtes pris en charge »** avec le nom, le **point d’accueil**,
-   le **référent**, le contact et la consigne ; si le rapprochement est incertain, elle propose les organisations les plus proches et
+5. La page publique affiche alors l’organisation avec le **point d’accueil**, le **référent**, le contact
+   et la consigne ; si le rapprochement est incertain, elle propose les organisations les plus proches et
    la liste complète, et le participant **choisit ou corrige** lui-même. Le choix est enregistré sur
    sa fiche (`care_org`) et visible au desk.
 
@@ -107,6 +107,22 @@ Points à connaître :
 - **Renseignez l’e-mail du référent** dans la colonne *Contact* : c’est l’indice le plus sûr, il
   reconnaît aussi les collègues du même domaine. Sans aucun e-mail et sans organisation sur la fiche,
   le participant choisit lui-même dans la liste (rien n’est inventé).
+
+### Paiement : la question « êtes-vous pris en charge ? »
+
+Quand un participant rattaché à une organisation n’a pas encore de paiement enregistré, le self
+check-in **ne lui réclame pas d’argent** : il lui demande d’abord **« Êtes-vous pris en charge par
+Pfizer ? »**.
+
+- **« Oui, je suis pris en charge »** → **aucun paiement à régler** : le paiement passe en *exonéré*
+  avec le tarif « Prise en charge — Pfizer », signé `self-checkin`. Le desk ne le relance pas.
+- **« Non, je dois payer »** → la page indique **« Paiement à régler à l’accueil »** avec les tarifs
+  indicatifs du congrès ; l’inscrit reste *à encaisser* dans le desk. Il peut se raviser en un appui.
+- Un paiement **déjà encaissé** au desk n’est jamais écrasé : la page dit simplement « Votre paiement
+  est enregistré ».
+- La réponse est conservée sur la fiche (`care_state` : `yes` / `no` / vide) et visible dans la liste
+  (pastille **« Pris en charge »** ou **« À encaisser »**), sur la fiche de l’inscrit, et dans la
+  sauvegarde. Le desk peut toujours corriger le paiement depuis sa fenêtre habituelle.
 - **Calcul 100 % local** (bibliothèque standard Python, aucune API payante, aucun appel réseau) :
   comparable à la casse et aux accents, score de similarité, seuil de reconnaissance automatique
   **0,82** et seuil de proposition **0,45**.
@@ -356,8 +372,8 @@ Tout se fait dans **Comptes** (Admin), sans `psql` ni outil en ligne de commande
 
 **Exporter la sauvegarde** télécharge `imagine-events-sauvegarde-AAAAMMJJ-HHMM.zip` :
 
-- `manifest.json` (format, **version 8**, moteur, date, nombre de lignes) ;
-- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements, la corbeille et `care_org`, l’organisation de prise en charge), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements), `07_event_orgs.csv` (organisations de prise en charge : point d’accueil, référent, contact, consigne) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) et `self_checkin_token` / `self_checkin_enabled` les liens du self check-in ;
+- `manifest.json` (format, **version 9**, moteur, date, nombre de lignes) ;
+- `01_events.csv`, `02_users.csv`, `03_participants.csv` (avec les paiements, la corbeille, `care_org` et `care_state` — organisation de prise en charge et réponse du participant sur le paiement), `04_sync_operations.csv`, `05_event_prices.csv` (grilles tarifaires), `06_badge_templates.csv` (modèles de badge, fonds et placements), `07_event_orgs.csv` (organisations de prise en charge : point d’accueil, référent, contact, consigne) — séparateur `;`, BOM UTF-8, ouvrables dans Excel ; les colonnes `deleted_at` / `deleted_by` y conservent les corbeilles (congrès et inscrits) et `self_checkin_token` / `self_checkin_enabled` les liens du self check-in ;
 - `INSTRUCTIONS.txt`.
 
 Les sessions ne sont jamais exportées et les mots de passe restent **hachés** (PBKDF2 + sel) : le fichier ne permet pas de les lire, mais il faut le garder dans un endroit privé.

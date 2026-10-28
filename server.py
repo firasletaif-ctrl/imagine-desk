@@ -108,7 +108,7 @@ def redact_database_url(url: str = "") -> str:
 # Restaurable depuis le navigateur, sur SQLite comme sur PostgreSQL — c’est le
 # chemin utilisé pour la rotation mensuelle d’une base Render gratuite.
 BACKUP_FORMAT = "imagine-events-desk-backup"
-BACKUP_VERSION = 8
+BACKUP_VERSION = 9
 BACKUP_INSTRUCTIONS_NAME = "INSTRUCTIONS.txt"
 
 # (préfixe du fichier, table, colonnes exportées dans cet ordre)
@@ -131,6 +131,8 @@ BACKUP_TABLES = [
         "deleted_at", "deleted_by",
         # Organisation qui prend en charge l'inscrit (v8).
         "care_org",
+        # Réponse du participant sur sa prise en charge (v9) : yes / no / vide.
+        "care_state",
     ]),
     ("04_sync_operations", "sync_operations", ["op_id", "event_id", "participant_id", "action", "result_json", "created_at"]),
     ("05_event_prices", "event_prices", [
@@ -202,6 +204,9 @@ CE QUI EST REMPLACE
   corbeille ; la colonne 18 de 03_participants.csv, les inscrits.
   Une date vide = element actif. Les colonnes 11 et 12 de 01_events.csv
   conservent le lien public Imagine Self Check-in (jeton et activation).
+  La colonne 20 de 03_participants.csv contient la reponse du participant sur sa
+  prise en charge (yes = pris en charge par son organisation, no = paiement a
+  regler a l'accueil, vide = pas encore repondu).
   07_event_orgs.csv contient les organisations du congres (point d'accueil,
   referent, consigne) ; la colonne 19 de 03_participants.csv indique
   l'organisation qui prend en charge chaque inscrit.
@@ -465,6 +470,9 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
             "deleted_by": clean_text(row.get("deleted_by"), 80),
             # Organisation de prise en charge (absente des sauvegardes v7 et antérieures).
             "care_org": clean_text(row.get("care_org"), 180),
+            # Réponse du participant sur sa prise en charge (v9 et suivantes).
+            "care_state": clean_text(row.get("care_state"), 10)
+            if clean_text(row.get("care_state"), 10) in ("yes", "no") else "",
             "created_at": clean_text(row.get("created_at"), 64) or utc_now(),
         })
         seen_ids.add(person_id)
@@ -476,7 +484,8 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
         event_id = clean_text(row.get("event_id"), 100)
         action = clean_text(row.get("action"), 30)
         if not op_id or op_id in seen_ops or event_id not in event_ids or action not in (
-                "create", "checkin", "undo", "payment", "self-checkin", "self-org"):
+                "create", "checkin", "undo", "payment", "self-checkin", "self-org",
+                "self-care-covered", "self-pay"):
             continue  # ligne d’historique inutilisable : ignorée sans bloquer la restauration
         result_json = clean_text(row.get("result_json"), 4000) or "{}"
         try:
@@ -656,14 +665,15 @@ def restore_backup_data(data: dict, keep_user: dict | None = None) -> dict:
                 """INSERT INTO participants(
                     id,event_id,name,email,company,category,code,checked_in_at,
                     payment_status,payment_amount,payment_method,payment_reference,payment_tariff,
-                    payment_confirmed_at,payment_confirmed_by,created_at,updated_at,deleted_at,deleted_by,care_org
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    payment_confirmed_at,payment_confirmed_by,created_at,updated_at,deleted_at,deleted_by,care_org,care_state
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (person["id"], person["event_id"], person["name"], person["email"], person["company"],
                  person["category"], person["code"], person["checked_in_at"], person["payment_status"],
                  person["payment_amount"], person["payment_method"], person["payment_reference"],
                  person["payment_tariff"], person["payment_confirmed_at"], person["payment_confirmed_by"], person["created_at"],
                  now,  # force les postes déjà ouverts à recharger la liste restaurée
-                 person["deleted_at"], person["deleted_by"], person["care_org"]),
+                 person["deleted_at"], person["deleted_by"], person["care_org"],
+                 clean_text(person.get("care_state"), 10)),
             )
         for org in data.get("event_orgs", []):
             org_id = clean_text(org.get("id"), 100)
@@ -1093,6 +1103,10 @@ EXPECTED_COLUMNS = {
         # Organisation qui prend en charge l'inscrit (nom tel qu'il figure dans
         # la liste des organisations du congrès). Vide = accueil général.
         ("care_org", "TEXT NOT NULL DEFAULT ''"),
+        # Réponse du participant au self check-in : '' (pas encore répondu),
+        # 'yes' (pris en charge par son organisation : rien à payer) ou
+        # 'no' (il règle lui-même : paiement à faire à l'accueil).
+        ("care_state", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -1554,6 +1568,7 @@ def participant_json(row: sqlite3.Row) -> dict:
         "deletedBy": (row["deleted_by"] if "deleted_by" in row.keys() else "") or "",
         # Organisation qui prend en charge l'inscrit (vide = accueil général).
         "careOrg": (row["care_org"] if "care_org" in row.keys() else "") or "",
+        "careState": (row["care_state"] if "care_state" in row.keys() else "") or "",
         "emailDomain": email_domain(row["email"] if "email" in row.keys() else ""),
     }
     data.update(payment_json(row))
@@ -2330,6 +2345,32 @@ def self_public_event(event) -> dict:
     }
 
 
+def self_payment_state(con, event_id: str, row) -> dict:
+    """Ce que la page publique doit savoir du paiement de cet inscrit.
+
+    `state` reprend la réponse du participant ('yes' = pris en charge par son
+    organisation, 'no' = il règle lui-même, '' = pas encore répondu).
+    """
+    status = row["payment_status"] if "payment_status" in row.keys() else "unpaid"
+    state = (row["care_state"] if "care_state" in row.keys() else "") or ""
+    prices = []
+    if status == "unpaid":
+        category = row["category"] if "category" in row.keys() else "participant"
+        rows = con.execute(
+            "SELECT label, amount, category FROM event_prices WHERE event_id=? AND active=1 "
+            "ORDER BY sort_order, label", (event_id,)).fetchall()
+        chosen = [item for item in rows if item["category"] == category] or rows
+        prices = [{"label": item["label"], "amount": round(float(item["amount"] or 0), 3)}
+                  for item in chosen[:4]]
+    return {
+        "status": status if status in PAYMENT_STATUSES else "unpaid",
+        "state": state if state in ("yes", "no") else "",
+        "amount": round(float(row["payment_amount"] or 0), 3) if "payment_amount" in row.keys() else 0.0,
+        "tariff": (row["payment_tariff"] or "") if "payment_tariff" in row.keys() else "",
+        "prices": prices,
+    }
+
+
 def self_public_participant(row) -> dict:
     return {
         "name": row["name"], "company": row["company"], "category": row["category"],
@@ -2390,9 +2431,10 @@ def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
             (event_id,)).fetchall()]
         care = care_for_person(row, orgs)
         care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
+        payment = self_payment_state(con, event_id, row)
         if row["checked_in_at"]:
             return {"ok": True, "already": True, "participant": self_public_participant(row),
-                    "participantId": row["id"], "care": care, "hasOrgs": bool(orgs),
+                    "participantId": row["id"], "care": care, "payment": payment, "hasOrgs": bool(orgs),
                     "event": self_public_event(event), "counts": self_checkin_snapshot(con, event_id)}
         now = utc_now()
         con.execute(
@@ -2407,7 +2449,8 @@ def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
         con.commit()
         fresh = con.execute("SELECT * FROM participants WHERE id=?", (row["id"],)).fetchone()
         return {"ok": True, "already": False, "participant": self_public_participant(fresh),
-                "participantId": row["id"], "care": care, "hasOrgs": bool(orgs),
+                "participantId": row["id"], "care": care,
+                "payment": self_payment_state(con, event_id, fresh), "hasOrgs": bool(orgs),
                 "event": self_public_event(event), "counts": self_checkin_snapshot(con, event_id)}
     except Exception:
         con.rollback()
@@ -2447,7 +2490,83 @@ def perform_self_care(token: str, participant_id: str, org_name: str, ip: str = 
         care = care_for_person(row, orgs)
         care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
         return {"ok": True, "org": result["org"], "care": care,
+                "payment": self_payment_state(con, event_id, row),
                 "participant": self_public_participant(row), "hasOrgs": True}
+    finally:
+        con.close()
+
+
+def perform_self_payment(token: str, participant_id: str, covered: bool, ip: str = "") -> dict:
+    """Le participant répond : « pris en charge par mon organisation » ou « je paie ».
+
+    Pris en charge → aucun paiement à régler : le paiement passe en « exonéré »
+    au nom de l'organisation. Sinon, l'inscrit reste « à encaisser » et le desk
+    le voit comme tel. Un paiement déjà enregistré n'est jamais écrasé.
+    """
+    bucket = f"{token}:pay:{ip or 'anonyme'}"
+    self_checkin_throttle(bucket)
+    con = connect()
+    try:
+        event = self_event_by_token(con, token)
+        if not event:
+            raise LookupError("Ce lien de check-in n’est plus actif.")
+        if event["status"] == "archived":
+            raise ValueError("Le check-in en ligne est fermé pour ce congrès.")
+        event_id = event["id"]
+        person_id = clean_text(participant_id, 100)
+        if not person_id:
+            raise ValueError("Participant non reconnu : recommencez le check-in.")
+        row = con.execute(
+            "SELECT * FROM participants WHERE id=? AND event_id=? AND deleted_at IS NULL",
+            (person_id, event_id)).fetchone()
+        if not row:
+            raise LookupError("Inscrit introuvable.")
+        orgs = [org_json(item) for item in con.execute(
+            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
+            (event_id,)).fetchall()]
+        care = care_for_person(row, orgs)
+        org_name = care["org"]["name"] if care["org"] else ""
+        if covered and not org_name:
+            self_checkin_record_failure(bucket)
+            raise ValueError("Aucune organisation ne vous est rattachée pour le moment.")
+        now = utc_now()
+        status = row["payment_status"] if "payment_status" in row.keys() else "unpaid"
+        if covered:
+            if status != "paid":
+                # Exonéré au nom de l'organisation : rien à encaisser au desk.
+                con.execute(
+                    "UPDATE participants SET care_state='yes',care_org=?,payment_status='exempt',payment_amount=0,"
+                    "payment_method='',payment_reference='',payment_tariff=?,payment_confirmed_at=?,"
+                    "payment_confirmed_by='self-checkin',updated_at=? WHERE id=? AND event_id=?",
+                    (org_name, ("Prise en charge — " + org_name)[:120], now, now, person_id, event_id),
+                )
+            else:
+                # Déjà payé : on ne touche pas au montant, on note seulement l'accord.
+                con.execute("UPDATE participants SET care_state='yes',care_org=?,updated_at=? WHERE id=? AND event_id=?",
+                            (org_name, now, person_id, event_id))
+            action = "self-care-covered"
+        else:
+            con.execute(
+                "UPDATE participants SET care_state='no',care_org=?,updated_at=? WHERE id=? AND event_id=?",
+                (org_name, now, person_id, event_id),
+            )
+            action = "self-pay"
+        con.execute(
+            "INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) VALUES(?,?,?,?,?,?)",
+            ("op-" + uuid.uuid4().hex, event_id, person_id, action,
+             json.dumps({"ok": True, "covered": bool(covered), "org": org_name}, ensure_ascii=False,
+                        separators=(",", ":")), now),
+        )
+        con.commit()
+        fresh = con.execute("SELECT * FROM participants WHERE id=?", (person_id,)).fetchone()
+        care = care_for_person(fresh, orgs)
+        care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
+        return {"ok": True, "covered": bool(covered), "care": care,
+                "payment": self_payment_state(con, event_id, fresh),
+                "participant": self_public_participant(fresh), "hasOrgs": bool(orgs)}
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
 
@@ -3049,8 +3168,8 @@ class Handler(BaseHTTPRequestHandler):
                         id,event_id,name,email,company,category,code,checked_in_at,
                         payment_status,payment_amount,payment_method,payment_reference,
                         payment_confirmed_at,payment_confirmed_by,created_at,updated_at,
-                        deleted_at,deleted_by,care_org
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        deleted_at,deleted_by,care_org,care_state
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (person_id, event_id, name, clean_text(item.get("email", ""), 180), clean_text(item.get("company", ""), 180),
                      clean_category(item.get("category", "participant")), code,
                      clean_text(item.get("checked_in_at", ""), 64) or None,
@@ -3060,7 +3179,8 @@ class Handler(BaseHTTPRequestHandler):
                      (clean_text(item.get("payment_confirmed_at", ""), 64) or now) if pay_status != "unpaid" else None,
                      clean_text(item.get("payment_confirmed_by", ""), 80) if pay_status != "unpaid" else "",
                      clean_text(item.get("created_at", ""), 64) or now, now,
-                     deleted_at, deleted_by, clean_text(item.get("care_org"), 180)),
+                     deleted_at, deleted_by, clean_text(item.get("care_org"), 180),
+                     clean_text(item.get("care_state"), 10)),
                 )
             if "users" in tables:
                 for raw_user in source.execute("SELECT * FROM users"):
@@ -3309,6 +3429,18 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     self.json(200, perform_self_care(self_care.group(1), body.get("participantId", ""),
                                                      body.get("org", ""), self.client_ip()))
+                except LookupError as exc:
+                    self.json(404, {"error": str(exc)})
+                except ValueError as exc:
+                    self.json(400, {"error": str(exc)})
+                return
+            self_pay = re.fullmatch(r"/api/self/([A-Za-z0-9._-]{20,80})/payment", path)
+            if self_pay:
+                # Aucune session : le participant déclare sa prise en charge.
+                body = self.read_json()
+                try:
+                    self.json(200, perform_self_payment(self_pay.group(1), body.get("participantId", ""),
+                                                        bool(body.get("covered")), self.client_ip()))
                 except LookupError as exc:
                     self.json(404, {"error": str(exc)})
                 except ValueError as exc:

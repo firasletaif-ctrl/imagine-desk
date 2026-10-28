@@ -28,7 +28,10 @@
     already: false,
     careOpen: false,
     careSkipped: false,
-    careError: ''
+    careError: '',
+    // Paiement : pris en charge par l'organisation (yes) ou à régler (no).
+    payment: null,
+    payError: ''
   };
 
   function escapeHtml(value) {
@@ -71,6 +74,7 @@
     clearTimeout(state.timer);
     state.care = null; state.participantId = ''; state.person = null; state.already = false;
     state.careOpen = false; state.careSkipped = false; state.careError = '';
+    state.payment = null; state.payError = '';
     if (!state.event) return renderProblem('Ce lien de check-in n’est plus actif.', 'Demandez le lien à l’organisateur du congrès.');
     if (!state.open) {
       return renderProblem('Le check-in en ligne est fermé.', 'Adressez-vous directement à l’accueil du congrès : nous vous enregistrons sur place.');
@@ -192,12 +196,121 @@
     return '';
   }
 
+  function money(value) {
+    var number = Number(value || 0);
+    if (!isFinite(number) || number <= 0) return '';
+    return new Intl.NumberFormat('fr-TN', { maximumFractionDigits: 3 }).format(number) + ' TND';
+  }
+
+  function payNeedsAnswer() {
+    var pay = state.payment;
+    if (!pay || pay.status !== 'unpaid' || pay.state) return false;
+    return !!(state.care && state.care.org);
+  }
+
+  function payHtml() {
+    var pay = state.payment;
+    if (!pay) return '';
+    var org = state.care && state.care.org;
+    var error = state.payError ? '<p class="self-care-error" role="alert">' + escapeHtml(state.payError) + '</p>' : '';
+    // 1. La question : « êtes-vous pris en charge ? »
+    if (payNeedsAnswer()) {
+      return '' +
+        '<div class="self-pay self-pay-ask">' +
+          '<p class="self-pay-kicker">Paiement</p>' +
+          '<h2>Êtes-vous pris en charge par ' + escapeHtml(org.name) + ' ?</h2>' +
+          '<p class="self-pay-help">Si votre inscription est réglée par cette organisation, vous n’avez rien à payer. Sinon, le règlement se fait à l’accueil.</p>' +
+          '<div class="self-pay-actions">' +
+            '<button class="self-pay-free" type="button" data-self-pay="yes">Oui, je suis pris en charge</button>' +
+            '<button class="self-pay-due" type="button" data-self-pay="no">Non, je dois payer</button>' +
+          '</div>' +
+          error +
+        '</div>';
+    }
+    // 2. Réponse « oui » : aucun paiement à régler.
+    if (pay.state === 'yes' || pay.status === 'exempt') {
+      return '' +
+        '<div class="self-pay self-pay-covered">' +
+          '<p class="self-pay-kicker">Paiement</p>' +
+          '<h2>Aucun paiement à régler</h2>' +
+          '<p class="self-pay-help">Votre inscription est réglée par ' + (org ? escapeHtml(org.name) : 'votre organisation') +
+            ' : présentez simplement cette confirmation à l’accueil' + (org && org.desk ? ' — ou rendez-vous ' + escapeHtml(org.desk) : '') + '.</p>' +
+        '</div>';
+    }
+    // 3. Réponse « non » (ou paiement déjà encaissé au desk).
+    if (pay.state === 'no') {
+      var prices = pay.prices || [];
+      var list = prices.length
+        ? '<ul class="self-pay-prices">' + prices.map(function (item) {
+            return '<li><span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(money(item.amount)) + '</strong></li>';
+          }).join('') + '</ul>'
+        : '';
+      return '' +
+        '<div class="self-pay self-pay-owed">' +
+          '<p class="self-pay-kicker">Paiement à régler</p>' +
+          '<h2>Rendez-vous à l’accueil pour payer</h2>' +
+          '<p class="self-pay-help">Votre inscription n’est pas prise en charge. Le règlement se fait au comptoir d’accueil, puis votre badge vous est remis.</p>' +
+          list +
+          '<button class="self-pay-change" type="button" data-self-pay-back="1">Finalement, je suis pris en charge</button>' +
+          error +
+        '</div>';
+    }
+    if (pay.status === 'paid') {
+      return '' +
+        '<div class="self-pay self-pay-covered">' +
+          '<p class="self-pay-kicker">Paiement</p>' +
+          '<h2>Votre paiement est enregistré</h2>' +
+          '<p class="self-pay-help">Aucun règlement à refaire : présentez cette confirmation à l’accueil.</p>' +
+        '</div>';
+    }
+    return error;
+  }
+
+  function answerPayment(covered) {
+    if (state.busy || !state.participantId) return;
+    state.busy = true;
+    state.payError = '';
+    var buttons = card.querySelectorAll('[data-self-pay]');
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+    fetch('/api/self/' + encodeURIComponent(token) + '/payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ participantId: state.participantId, covered: !!covered })
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (result.ok && result.data && result.data.payment) {
+          state.payment = result.data.payment;
+          if (result.data.care) state.care = result.data.care;
+          if (result.data.participant) state.person = result.data.participant;
+          state.payError = '';
+          renderSuccess({});
+          return;
+        }
+        state.payError = (result.data && result.data.error) || 'Réponse non enregistrée : présentez-vous à l’accueil.';
+        renderSuccess({});
+      })
+      .catch(function () {
+        state.payError = 'Réseau interrompu : réessayez, ou présentez-vous à l’accueil.';
+        renderSuccess({});
+      })
+      .finally(function () {
+        state.busy = false;
+        shell.removeAttribute('data-busy');
+      });
+  }
+
   function renderSuccess(payload) {
     clearTimeout(state.timer);
     payload = payload || {};
     if (payload.participant) state.person = payload.participant;
     if (payload.participantId) state.participantId = payload.participantId;
     if (payload.care !== undefined) state.care = payload.care;
+    if (payload.payment !== undefined) state.payment = payload.payment;
     if (payload.counts) state.counts = payload.counts;
     if (payload.already !== undefined) state.already = !!payload.already;
     var person = state.person || {};
@@ -212,12 +325,13 @@
         '<p class="self-state-hint">Présentez cette confirmation à l’accueil pour retirer votre badge.</p>' +
       '</div>' +
       careHtml() +
+      payHtml() +
       progressHtml() +
       '<button class="self-next" id="selfNext" type="button">Personne suivante</button>' +
-      (careNeedsAction()
-        ? '<p class="self-restart">Choisissez votre organisation, ou appuyez sur « Personne suivante ».</p>'
+      (careNeedsAction() || payNeedsAnswer()
+        ? '<p class="self-restart">Répondez ci-dessus, ou appuyez sur « Personne suivante ».</p>'
         : '<p class="self-restart">Retour automatique à l’accueil dans quelques secondes…</p>');
-    if (!careNeedsAction()) state.timer = setTimeout(function () { renderWelcome(''); }, RESET_DELAY);
+    if (!careNeedsAction() && !payNeedsAnswer()) state.timer = setTimeout(function () { renderWelcome(''); }, RESET_DELAY);
   }
 
   function chooseOrg(orgName) {
@@ -355,6 +469,11 @@
     if (target.closest('[data-self-care-open]')) { state.careOpen = true; state.careError = ''; renderSuccess({}); return; }
     if (target.closest('[data-self-care-skip]')) { state.careSkipped = true; state.careOpen = false; state.careError = ''; renderSuccess({}); return; }
     if (target.closest('[data-self-care-change]')) { state.careOpen = true; state.careSkipped = false; state.careError = ''; renderSuccess({}); return; }
+    var payYes = target.closest('[data-self-pay="yes"]');
+    if (payYes) { answerPayment(true); return; }
+    var payNo = target.closest('[data-self-pay="no"]');
+    if (payNo) { answerPayment(false); return; }
+    if (target.closest('[data-self-pay-back]')) { answerPayment(true); return; }
   });
 
   // Entrée sans formulaire actif (borne avec lecteur code-barres).
