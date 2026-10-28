@@ -572,3 +572,19 @@ body.rush-open{overflow:hidden}
   .org-row-tools{margin-left:0;width:100%;justify-content:flex-end}
   .org-row .org-name{min-width:100%}
 }
+
+/* Organisations : mode d’emploi et points d’entrée */
+.orgs-guide{display:grid;gap:9px;margin:14px 0 0;padding:14px 16px;border:1px solid #DFE8F4;border-radius:16px;background:#F7FAFE}
+.orgs-guide-step{display:flex;gap:11px;align-items:flex-start}
+.orgs-guide-step b{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#13294B;color:#fff;font-size:12.5px;font-weight:800}
+.orgs-guide-step strong{display:block;color:#13294B;font-size:14.5px;font-weight:800;line-height:1.3}
+.orgs-guide-step span{display:block;margin-top:2px;color:#5A6B85;font-size:13.5px;line-height:1.5}
+.orgs-guide-step em{font-style:normal;font-weight:700;color:#13294B}
+.orgs-empty-note{margin:10px 0 0;color:#8A96A8;font-size:13px;line-height:1.5}
+.orgs-empty-note strong{color:#B45309}
+.orgs-empty-note em{font-style:normal;font-weight:700;color:#13294B}
+.self-panel-orgs{display:flex;align-items:center;gap:11px;margin:14px 0 0;padding:12px 14px;border:1px solid #E3EAF5;border-radius:14px;background:#F7FAFE;color:#46566F;font-size:13.5px;line-height:1.5}
+.self-panel-orgs svg{flex:none;color:#13294B}
+.self-panel-orgs span{flex:1;min-width:180px}
+.self-panel-orgs .btn{flex:none}
+@media(max-width:720px){.self-panel-orgs{flex-wrap:wrap}.self-panel-orgs .btn{width:100%}}
