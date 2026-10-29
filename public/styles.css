@@ -590,3 +590,30 @@ body.rush-open{overflow:hidden}
 @media(max-width:720px){.self-panel-orgs{flex-wrap:wrap}.self-panel-orgs .btn{width:100%}}
 .self-care-note{margin:2px 0 0;color:#5A6B85;font-size:13.5px;font-weight:600}
 .pay-badge.covered{background:#E7F5EF;color:#0E7C5A;border-color:#BFE6D6}
+
+/* Organisations : diagnostic « que verra ce participant ? » */
+.orgs-diag{margin:14px 0 0;padding:14px 16px;border:1px dashed #C9D8EE;border-radius:16px;background:#FBFDFF}
+.orgs-diag-head strong{display:block;color:#13294B;font-size:14.5px;font-weight:800}
+.orgs-diag-head span{display:block;margin-top:2px;color:#5A6B85;font-size:13px;line-height:1.5}
+.orgs-diag-head em{font-style:normal;font-weight:700;color:#13294B}
+.orgs-diag-row{display:flex;gap:9px;margin:10px 0 0;flex-wrap:wrap}
+.orgs-diag-row .org-input{flex:1;min-width:220px}
+.orgs-diag-row .btn{flex:none}
+.orgs-diag-empty{margin:10px 0 0;color:#8A96A8;font-size:13px}
+.orgs-diag-card{margin:11px 0 0;padding:13px 15px;border-radius:14px;border:1px solid #E3EAF5;background:#fff}
+.orgs-diag-card.ok{border-color:#BFE6D6;background:#F1FAF5}
+.orgs-diag-card.warn{border-color:#F3D9A4;background:#FFFBF0}
+.orgs-diag-card.ko{border-color:#F3D9DE;background:#FFF7F8}
+.orgs-diag-verdict{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:14px;font-weight:800;color:#13294B}
+.orgs-diag-verdict i{width:9px;height:9px;border-radius:50%;background:#8A96A8}
+.orgs-diag-card.ok .orgs-diag-verdict i{background:#0E7C5A}
+.orgs-diag-card.warn .orgs-diag-verdict i{background:#D97706}
+.orgs-diag-card.ko .orgs-diag-verdict i{background:#C41E3A}
+.orgs-diag-row-line{display:flex;justify-content:space-between;gap:14px;padding:5px 0;border-top:1px solid rgba(19,41,75,.06);font-size:13px}
+.orgs-diag-row-line span{color:#7A8798;flex:none}
+.orgs-diag-row-line strong{color:#13294B;font-weight:700;text-align:right}
+.orgs-diag-row-line strong.ok{color:#0E7C5A}
+.orgs-diag-row-line strong.ko{color:#C41E3A}
+.orgs-diag-row-line em{font-style:normal;color:#7A8798;font-weight:600}
+.orgs-diag-hint{margin:9px 0 0;color:#46566F;font-size:13px;line-height:1.5}
+.orgs-diag-card .btn{margin-top:10px}

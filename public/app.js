@@ -371,7 +371,7 @@ function openAddModal(){
   openModal(`<div class="modal-head"><div><h2>Ajouter un participant</h2><p>En ligne, l’inscription est enregistrée au serveur. Hors ligne, elle rejoint la file locale.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><form id="personForm"><div class="modal-body"><div class="form-grid"><div class="field full"><label for="personName">Nom complet *</label><input id="personName" name="name" required maxlength="180" placeholder="Ex. Amira Ben Salem"></div><div class="field"><label for="personEmail">E-mail</label><input id="personEmail" name="email" type="email" maxlength="180" placeholder="nom@exemple.tn"></div><div class="field"><label for="personCategory">Catégorie</label><select id="personCategory" name="category"><option value="participant">Participant</option><option value="vip">VIP</option><option value="speaker">Intervenant</option><option value="press">Presse</option><option value="team">Équipe</option></select></div><div class="field full"><label for="personCompany">Organisation</label><input id="personCompany" name="company" maxlength="180" placeholder="Entreprise, institution…"></div><div class="field full"><label for="personCode">Code badge</label><input id="personCode" name="code" maxlength="40" placeholder="Généré automatiquement si vide"><span class="field-hint">Un code court est attribué à chaque participant.</span></div></div></div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Annuler</button><button class="btn btn-primary" type="submit">${icon('plus')}Ajouter</button></div></form>`,true);
 }
 function openDetails(id){const p=findPerson(id);if(!p)return;const pay=paymentOf(p);const event=getEvent();openModal(`<div class="modal-head"><div><h2>Fiche participant</h2><p>Inscription à ${esc(event?.name||'ce congrès')}.</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div><div class="modal-body"><div class="detail-hero"><span class="avatar">${esc(initials(p.name))}</span><div><h3>${esc(p.name)}</h3><p>${esc(p.company||'Organisation non renseignée')}</p></div></div><div class="detail-grid"><div class="detail-cell"><span>Catégorie</span><strong>${esc(displayCategory(p.category))}</strong></div><div class="detail-cell"><span>Statut</span><strong>${p.checkedIn?'Arrivée confirmée':'À accueillir'}</strong></div><div class="detail-cell"><span>E-mail</span><strong>${esc(p.email||'—')}</strong></div><div class="detail-cell"><span>Code badge</span><strong>${esc(p.code||'—')}</strong></div><div class="detail-cell"><span>Paiement</span><strong>${esc(paymentStatusNames[pay.status])}${pay.status==='paid'&&pay.amount>0?` · ${esc(money(pay.amount))}`:''}</strong></div><div class="detail-cell"><span>Moyen de paiement</span><strong>${esc(paymentMethodNames[pay.method]||'—')}</strong></div><div class="detail-cell"><span>Référence</span><strong>${esc(pay.reference||'—')}</strong></div>
-<div class="detail-cell"><span>Tarif appliqué</span><strong>${esc(pay.tariff||'—')}</strong></div><div class="detail-cell"><span>Paiement confirmé</span><strong>${pay.at?`${esc(dateTimeLabel(pay.at))}${pay.by?` · ${esc(pay.by)}`:''}`:'—'}</strong></div><div class="detail-cell"><span>Heure d’arrivée</span><strong>${esc(localTime(p.checkedInAt))}</strong></div><div class="detail-cell"><span>Synchronisation</span><strong>${getQueue().some(op=>op.participantId===p.id)?'En attente':'À jour / local'}</strong></div><div class="detail-cell"><span>Prise en charge</span><strong>${esc(p.careOrg||'Rapprochement automatique')}${p.careState==='yes'?' · confirmée au self check-in':p.careState==='no'?' · paie lui-même':''}</strong></div></div>${needsPayment(p)?`<div class="notice warning" style="margin-top:12px">${icon('cash')}<span><strong>Paiement non confirmé.</strong> Encaissement possible au desk avant ou après l’arrivée.</span></div>`:''}</div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('trash')}Corbeille</button><button class="btn btn-secondary" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('badge')}Voir le badge</button><button class="btn btn-secondary" type="button" data-action="payment" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('cash')}${needsPayment(p)?'Encaisser':'Paiement'}</button>${p.checkedIn?`<button class="btn btn-danger" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler l’arrivée</button>`:`<button class="btn btn-primary" type="button" data-action="checkin" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('check')}Confirmer l’arrivée</button>`}</div>`,true);}
+<div class="detail-cell"><span>Tarif appliqué</span><strong>${esc(pay.tariff||'—')}</strong></div><div class="detail-cell"><span>Paiement confirmé</span><strong>${pay.at?`${esc(dateTimeLabel(pay.at))}${pay.by?` · ${esc(pay.by)}`:''}`:'—'}</strong></div><div class="detail-cell"><span>Heure d’arrivée</span><strong>${esc(localTime(p.checkedInAt))}</strong></div><div class="detail-cell"><span>Synchronisation</span><strong>${getQueue().some(op=>op.participantId===p.id)?'En attente':'À jour / local'}</strong></div><div class="detail-cell"><span>Prise en charge</span><strong>${esc(p.careOrg||'Rapprochement automatique')}${p.careState==='yes'?' · confirmée au self check-in':p.careState==='no'?' · paie lui-même':''}</strong></div></div>${needsPayment(p)?`<div class="notice warning" style="margin-top:12px">${icon('cash')}<span><strong>Paiement non confirmé.</strong> Encaissement possible au desk avant ou après l’arrivée.</span></div>`:''}</div><div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-danger" type="button" data-action="trash-person" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('trash')}Corbeille</button><button class="btn btn-secondary" type="button" data-action="test-care" data-id="${esc(p.id)}">${icon('cluster')}Tester la prise en charge</button><button class="btn btn-secondary" type="button" data-action="badge" data-id="${esc(p.id)}">${icon('badge')}Voir le badge</button><button class="btn btn-secondary" type="button" data-action="payment" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('cash')}${needsPayment(p)?'Encaisser':'Paiement'}</button>${p.checkedIn?`<button class="btn btn-danger" type="button" data-action="undo" data-id="${esc(p.id)}">Annuler l’arrivée</button>`:`<button class="btn btn-primary" type="button" data-action="checkin" data-id="${esc(p.id)}" ${event?.status==='archived'?'disabled':''}>${icon('check')}Confirmer l’arrivée</button>`}</div>`,true);}
 
 function paymentMethodOptions(selected){return PAYMENT_METHOD_OPTIONS.map(key=>`<option value="${key}" ${selected===key?'selected':''}>${esc(paymentMethodNames[key])}</option>`).join('');}
 function openPaymentModal(id,options={}){
@@ -1939,7 +1939,9 @@ function renderSelfCheckinPanel(config){
       <span class="self-panel-counts">${counts.arrived} arrivée${counts.arrived===1?'':'s'} sur ${counts.total} inscrit${counts.total===1?'':'s'}</span>
     </div>
     <p class="self-panel-intro">Vos participants confirment eux-mêmes leur arrivée depuis leur téléphone ou une borne, en saisissant leur code badge ou leur e-mail. Les arrivées remontent <strong>en direct</strong> dans le desk, y compris en mode rush.</p>
-    <div class="self-panel-orgs">${icon('cluster',14)}<span>Après sa confirmation, le participant voit <strong>où aller</strong> et <strong>qui le prend en charge</strong> : cela vient de la liste des organisations du congrès.</span><button class="btn btn-secondary btn-sm" type="button" data-action="open-orgs">${icon('cluster',12)}Organisations</button></div>
+    ${Number(config.orgCount||0)===0
+      ? `<div class="notice warning" style="margin:14px 0 0">${icon('info')}<span><strong>Aucune organisation enregistrée.</strong> Vos participants ne verront ni « où aller » ni « qui les prend en charge ». <button class="link-button" type="button" data-action="open-orgs">Créer la liste des organisations →</button></span></div>`
+      : `<div class="self-panel-orgs">${icon('cluster',14)}<span>Après sa confirmation, le participant voit <strong>où aller</strong> et <strong>qui le prend en charge</strong> : <strong>${Number(config.orgCount)} organisation${Number(config.orgCount)>1?'s':''}</strong> enregistrée${Number(config.orgCount)>1?'s':''} pour ce congrès.</span><button class="btn btn-secondary btn-sm" type="button" data-action="open-orgs">${icon('cluster',12)}Organisations</button></div>`}
     ${enabled?`
       <div class="self-link-row">
         <input class="self-link-input" id="selfCheckinLink" type="text" readonly value="${esc(url)}" aria-label="Lien public du self check-in">
@@ -2015,11 +2017,14 @@ function orgsTarget(){
   if(event.status==='archived'){showToast('Ce congrès est archivé. Réactivez-le pour modifier ses organisations.');return null;}
   return event;
 }
-async function openOrgsModal(){
+let orgsDiagQuery='';
+async function openOrgsModal(query=''){
   const event=orgsTarget();if(!event)return;
   orgsState={eventId:event.id,stats:new Map()};
+  orgsDiagQuery=String(query||'');
   openModal(`<div id="orgsRoot">${orgsHead(event)}<div class="modal-body"><p class="orgs-loading">Chargement des organisations…</p></div></div>`,true);
   await loadOrgs(event.id);
+  if(orgsDiagQuery)runOrgsDiagnostic();
 }
 function orgsHead(event){
   return `<div class="modal-head"><div><h2>Organisations & prise en charge</h2><p>${esc(event.name||'Congrès')} · qui accueille qui</p></div><button class="modal-close" type="button" data-action="close-modal" aria-label="Fermer">×</button></div>`;
@@ -2087,6 +2092,14 @@ function renderOrgsPanel(orgs){
     </div>
     <div class="org-rows" id="orgRows">${(orgs||[]).length?(orgs||[]).map(orgRowHTML).join(''):orgRowHTML({})}</div>
     <p class="orgs-empty-note">${(orgs||[]).length?'':'<strong>La liste est vide.</strong> Remplissez la ligne ci-dessus (seul le nom est obligatoire), puis appuyez sur <em>Enregistrer les organisations</em>.'}</p>
+    <div class="orgs-diag">
+      <div class="orgs-diag-head"><strong>Tester un participant</strong><span>Saisissez son code badge, son e-mail ou son nom : vous verrez <em>exactement</em> ce qu’il obtient au self check-in, et pourquoi.</span></div>
+      <div class="orgs-diag-row">
+        <input class="org-input" id="orgsDiagQuery" type="text" maxlength="180" value="${esc(orgsDiagQuery||'')}" placeholder="IE-1001, nom@exemple.tn ou Amira Ben Salem" aria-label="Participant à tester">
+        <button class="btn btn-secondary btn-sm" type="button" data-action="orgs-diag">${icon('search',13)}Vérifier</button>
+      </div>
+      <div id="orgsDiagResult"></div>
+    </div>
     <div class="notice" style="margin-top:12px">${icon('info')}<span>Les compteurs « rapprochements auto » indiquent les inscrits dont l’organisation a été reconnue automatiquement. Liste et consignes sont partagées entre tous les postes connectés.</span></div>
   </div>
   <div class="modal-footer"><button class="btn btn-secondary" type="button" data-action="close-modal">Fermer</button><button class="btn btn-primary" type="submit">${icon('check')}Enregistrer les organisations</button></div></form>`;
@@ -2165,6 +2178,61 @@ async function saveOrgs(){
     return true;
   }catch(error){showToast(error.message||'Enregistrement des organisations impossible.');return false;}
 }
+const ORG_VERDICTS={
+  confirmed:{label:'Prise en charge confirmée',tone:'ok'},
+  matched:{label:'Organisation reconnue',tone:'warn'},
+  suggested:{label:'À choisir par le participant',tone:'warn'},
+  none:{label:'Aucune organisation reconnue',tone:'ko'},
+  'no-orgs':{label:'Aucune organisation dans le congrès',tone:'ko'},
+  'not-found':{label:'Participant introuvable',tone:'ko'},
+  'no-query':{label:'Test en attente',tone:'idle'}
+};
+async function runOrgsDiagnostic(query=null){
+  const event=getEvent();if(!event)return;
+  const field=$('#orgsDiagQuery');
+  if(query===null)query=field?field.value:'';
+  orgsDiagQuery=String(query||'');
+  const box=$('#orgsDiagResult');if(!box)return;
+  if(!orgsDiagQuery.trim()){box.innerHTML='<p class="orgs-diag-empty">Saisissez un code badge, un e-mail ou un nom.</p>';return;}
+  box.innerHTML='<p class="orgs-diag-empty">Vérification…</p>';
+  try{
+    const data=await api(`/api/events/${encodeURIComponent(event.id)}/orgs/preview`,{method:'POST',body:JSON.stringify({query:orgsDiagQuery})});
+    renderOrgsDiagnostic(data);
+  }catch(error){
+    box.innerHTML=`<p class="orgs-diag-empty">${esc(error.message||'Vérification impossible.')}</p>`;
+  }
+}
+function renderOrgsDiagnostic(data){
+  const box=$('#orgsDiagResult');if(!box||!data)return;
+  const verdict=ORG_VERDICTS[data.verdict]||ORG_VERDICTS['no-query'];
+  const person=data.participant;
+  const care=data.care||{};
+  const org=care.org;
+  const sourceLabels={contact:'l’adresse e-mail du référent',email:'le domaine de son adresse e-mail',company:'l’organisation de sa fiche'};
+  const rows=[];
+  if(person){
+    rows.push(`<div class="orgs-diag-row-line"><span>Fiche</span><strong>${esc(person.name)}</strong></div>`);
+    rows.push(`<div class="orgs-diag-row-line"><span>Organisation de la fiche</span><strong>${esc(person.company||'—')}</strong></div>`);
+    rows.push(`<div class="orgs-diag-row-line"><span>E-mail</span><strong>${esc(person.email||'—')}${person.emailDomain?` <em>(${esc(person.emailDomain)})</em>`:''}</strong></div>`);
+  }
+  if(org){
+    rows.push(`<div class="orgs-diag-row-line"><span>Organisation obtenue</span><strong class="ok">${esc(org.name)}${org.desk?` · ${esc(org.desk)}`:''}</strong></div>`);
+    rows.push(`<div class="orgs-diag-row-line"><span>Reconnue grâce à</span><strong>${esc(sourceLabels[care.source]||'sa prise en charge déjà validée')} · score ${Number(care.score||0).toFixed(2)}</strong></div>`);
+  }else if(data.found){
+    rows.push('<div class="orgs-diag-row-line"><span>Organisation obtenue</span><strong class="ko">aucune</strong></div>');
+  }
+  if(data.found){
+    rows.push(`<div class="orgs-diag-row-line"><span>Paiement</span><strong>${esc(data.payment&&data.payment.status==='exempt'?'pris en charge — rien à régler':data.payment&&data.payment.status==='paid'?'déjà payé':'à régler / à décider à l’arrivée')}</strong></div>`);
+    rows.push(`<div class="orgs-diag-row-line"><span>Arrivée</span><strong>${person&&person.checkedIn?'déjà enregistrée':'pas encore'}</strong></div>`);
+  }
+  box.innerHTML=`<div class="orgs-diag-card ${verdict.tone}">
+    <p class="orgs-diag-verdict"><i></i>${esc(verdict.label)}</p>
+    ${rows.join('')}
+    <p class="orgs-diag-hint">${esc(data.hint||'')}</p>
+    ${data.orgCount===0?'<button class="btn btn-primary btn-sm" type="button" data-action="org-add">Ajouter une organisation</button>':''}
+  </div>`;
+}
+
 async function importOrgsFromParticipants(){
   const event=getEvent();if(!event)return;
   if(!window.confirm('Ajouter à la liste les organisations déjà saisies sur les fiches inscrits ? Les lignes existantes ne sont pas modifiées.'))return;
@@ -2197,11 +2265,13 @@ document.addEventListener('click',async event=>{
   else if(action==='rush-sound'){toggleRushSound();return;}
   else if(action==='rush-undo'){rushUndoLast();return;}
   else if(action==='open-orgs'){await openOrgsModal();return;}
+  else if(action==='test-care'){const person=findPerson(id);await openOrgsModal(person?(person.code||person.email||person.name):'');return;}
   else if(action==='org-add'){addOrgRow();return;}
   else if(action==='org-up'){moveOrgRow(button,-1);return;}
   else if(action==='org-down'){moveOrgRow(button,1);return;}
   else if(action==='org-remove'){button.closest('.org-row')?.remove();return;}
   else if(action==='org-import'){await importOrgsFromParticipants();return;}
+  else if(action==='orgs-diag'){await runOrgsDiagnostic();return;}
   else if(action==='open-self-checkin'){await openSelfCheckinModal();return;}
   else if(action==='self-enable'){await setSelfCheckin(true);return;}
   else if(action==='self-disable'){await setSelfCheckin(false);return;}
@@ -2284,6 +2354,7 @@ document.addEventListener('input',event=>{
   if(event.target.id==='badgeSearch'){badgeQuery=event.target.value;const position=event.target.selectionStart;render();const next=$('#badgeSearch');if(next){next.focus();try{next.setSelectionRange(position,position);}catch(e){}}}
 });
 document.addEventListener('keydown',event=>{
+  if(event.key==='Enter'&&event.target.id==='orgsDiagQuery'){event.preventDefault();runOrgsDiagnostic();return;}
   if(event.key==='Escape'&&rush){event.preventDefault();closeRush();return;}
   if(event.key==='Escape')closeModal();
   if(event.key==='Enter'&&event.target.id==='peopleSearch'){const query=norm(event.target.value);const p=getPeople().find(x=>norm(x.code)===query);if(p){event.preventDefault();if(p.checkedIn)showToast(`${p.name} est déjà enregistré comme arrivé.`);else performCheckin(p.id,'checkin');}}
