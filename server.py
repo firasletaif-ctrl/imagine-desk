@@ -2476,6 +2476,28 @@ def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
         con.close()
 
 
+def mark_covered(con, event_id: str, person_id: str, org_name: str, now: str) -> None:
+    """Note que l'inscrit est pris en charge par cette organisation.
+
+    Rien à encaisser : le paiement passe en « exonéré » au nom de l'organisation.
+    Un paiement déjà enregistré n'est jamais écrasé : on note seulement l'accord.
+    """
+    row = con.execute(
+        "SELECT * FROM participants WHERE id=? AND event_id=?", (person_id, event_id)).fetchone()
+    if not row:
+        return
+    status = row["payment_status"] if "payment_status" in row.keys() else "unpaid"
+    if status != "paid":
+        con.execute(
+            "UPDATE participants SET care_state='yes',care_org=?,payment_status='exempt',payment_amount=0,"
+            "payment_method='',payment_reference='',payment_tariff=?,payment_confirmed_at=?,"
+            "payment_confirmed_by='self-checkin',updated_at=? WHERE id=? AND event_id=?",
+            (org_name, ("Prise en charge — " + org_name)[:120], now, now, person_id, event_id))
+    else:
+        con.execute("UPDATE participants SET care_state='yes',care_org=?,updated_at=? WHERE id=? AND event_id=?",
+                    (org_name, now, person_id, event_id))
+
+
 def perform_self_care(token: str, participant_id: str, org_name: str, ip: str = "") -> dict:
     """Le participant précise (ou corrige) son organisation depuis la page publique."""
     bucket = f"{token}:care:{ip or 'anonyme'}"
@@ -2499,6 +2521,16 @@ def perform_self_care(token: str, participant_id: str, org_name: str, ip: str = 
         except ValueError:
             self_checkin_record_failure(bucket)
             raise
+        # Choisir son organisation, c'est répondre « oui, je suis pris en charge ».
+        if result.get("name"):
+            mark_covered(con, event_id, person_id, result["name"], utc_now())
+            con.execute(
+                "INSERT INTO sync_operations(op_id,event_id,participant_id,action,result_json,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("op-" + uuid.uuid4().hex, event_id, person_id, "self-care-covered",
+                 json.dumps({"ok": True, "org": result["name"], "covered": True},
+                            ensure_ascii=False, separators=(",", ":")), utc_now()))
+            con.commit()
         row = con.execute(
             "SELECT * FROM participants WHERE id=? AND event_id=?", (person_id, event_id)
         ).fetchone()
@@ -2543,20 +2575,8 @@ def perform_self_payment(token: str, participant_id: str, covered: bool, ip: str
             self_checkin_record_failure(bucket)
             raise ValueError("Aucune organisation ne vous est rattachée pour le moment.")
         now = utc_now()
-        status = row["payment_status"] if "payment_status" in row.keys() else "unpaid"
         if covered:
-            if status != "paid":
-                # Exonéré au nom de l'organisation : rien à encaisser au desk.
-                con.execute(
-                    "UPDATE participants SET care_state='yes',care_org=?,payment_status='exempt',payment_amount=0,"
-                    "payment_method='',payment_reference='',payment_tariff=?,payment_confirmed_at=?,"
-                    "payment_confirmed_by='self-checkin',updated_at=? WHERE id=? AND event_id=?",
-                    (org_name, ("Prise en charge — " + org_name)[:120], now, now, person_id, event_id),
-                )
-            else:
-                # Déjà payé : on ne touche pas au montant, on note seulement l'accord.
-                con.execute("UPDATE participants SET care_state='yes',care_org=?,updated_at=? WHERE id=? AND event_id=?",
-                            (org_name, now, person_id, event_id))
+            mark_covered(con, event_id, person_id, org_name, now)
             action = "self-care-covered"
         else:
             con.execute(
@@ -2638,14 +2658,17 @@ def care_preview(event_id: str, query: str) -> dict:
                 "Aucune organisation active dans ce congrès : le participant ne verra aucune prise en charge. "
                 "Ajoutez vos organisations, puis enregistrez la liste.")
         elif care["org"] and care["confirmed"]:
-            verdict, hint = "confirmed", f"Prise en charge confirmée : {care['org']['name']}."
+            verdict, hint = "confirmed", (
+                f"Prise en charge confirmée : {care['org']['name']}. "
+                "Le participant voit « Vous êtes pris en charge » et n’a rien à payer.")
         elif care["org"]:
             source = {"contact": "l’adresse e-mail du référent",
                       "email": "le domaine de son adresse e-mail",
                       "company": "l’organisation inscrite sur sa fiche"}.get(care.get("source", ""), "sa fiche")
             verdict, hint = "matched", (
                 f"Organisation reconnue d’après {source} (score {care['score']:.2f}). "
-                "Le participant verra « Organisation reconnue » et devra confirmer en un appui.")
+                f"Le participant verra la question « Êtes-vous pris en charge par {care['org']['name']} ? » : "
+                "un appui sur « Oui » et il n’a rien à payer.")
         elif care.get("suggestions"):
             verdict, hint = "suggested", (
                 "Aucun rapprochement automatique : le participant devra choisir dans la liste "
