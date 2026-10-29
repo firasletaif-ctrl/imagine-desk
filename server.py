@@ -2610,6 +2610,14 @@ def care_preview(event_id: str, query: str) -> dict:
         if problem:
             return {**base, "found": False, "verdict": "not-found", "hint": problem}
         care = care_for_person(row, orgs)
+        # Une organisation présente dans la liste mais désactivée est la cause la
+        # plus fréquente d'un « je ne suis pas pris en charge » : on la nomme,
+        # y compris quand plus aucune organisation n'est active.
+        dormant = None
+        if not care["org"] and inactive:
+            care_all = care_for_person(row, all_orgs)
+            if care_all["org"]:
+                dormant = care_all["org"]
         payment = self_payment_state(con, event_id, row)
         person = {
             "id": row["id"], "name": row["name"],
@@ -2620,7 +2628,12 @@ def care_preview(event_id: str, query: str) -> dict:
             "checkedIn": bool(row["checked_in_at"]),
         }
         care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
-        if not orgs:
+        if dormant:
+            verdict, hint = "inactive", (
+                f"« {dormant['name']} » correspond à cet inscrit, mais cette organisation est "
+                "désactivée : cochez-la « Active » puis enregistrez la liste. Tant qu’elle est "
+                "désactivée, le participant n’est pas reconnu.")
+        elif not orgs:
             verdict, hint = "no-orgs", (
                 "Aucune organisation active dans ce congrès : le participant ne verra aucune prise en charge. "
                 "Ajoutez vos organisations, puis enregistrez la liste.")
@@ -2641,6 +2654,8 @@ def care_preview(event_id: str, query: str) -> dict:
             verdict, hint = "none", (
                 "Aucune organisation reconnue : le participant devra choisir lui-même dans la liste. "
                 "Renseignez le champ « organisation » de sa fiche, ou l’e-mail du référent sur l’organisation.")
+        if dormant:
+            base = {**base, "dormantOrg": {"name": dormant["name"], "id": dormant.get("id", "")}}
         return {**base, "found": True, "verdict": verdict, "hint": hint,
                 "participant": person, "care": care, "payment": payment}
     finally:

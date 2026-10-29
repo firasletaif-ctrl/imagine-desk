@@ -617,3 +617,6 @@ body.rush-open{overflow:hidden}
 .orgs-diag-row-line em{font-style:normal;color:#7A8798;font-weight:600}
 .orgs-diag-hint{margin:9px 0 0;color:#46566F;font-size:13px;line-height:1.5}
 .orgs-diag-card .btn{margin-top:10px}
+.orgs-diag-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.orgs-diag-actions:empty{display:none}
+.orgs-diag-actions .btn{margin-top:0}
