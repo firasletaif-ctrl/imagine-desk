@@ -2391,11 +2391,42 @@ def self_checkin_status(token: str, ip: str = "") -> dict:
         con.close()
 
 
-def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
-    """Enregistre l'arrivée d'un participant depuis le lien public (idempotent)."""
+def self_find_participant(con, event_id: str, query: str):
+    """Retrouve un inscrit comme le fait le self check-in (code, e-mail, nom exact).
+
+    Retourne (ligne, None) ou (None, message d'erreur destiné au participant).
+    """
     entry = clean_text(query, 180).strip()
     if len(entry) < 3:
-        raise ValueError("Saisissez votre code badge ou votre e-mail.")
+        return None, "Saisissez votre code badge ou votre e-mail."
+    lowered = entry.lower()
+    row = con.execute(
+        "SELECT * FROM participants WHERE event_id=? AND deleted_at IS NULL "
+        "AND (lower(code)=? OR lower(email)=?) ORDER BY created_at LIMIT 1",
+        (event_id, lowered, lowered),
+    ).fetchone()
+    if row is None and len(entry) >= 4:
+        # Nom complet exact, uniquement s'il est unique dans le congrès.
+        matches = con.execute(
+            "SELECT * FROM participants WHERE event_id=? AND deleted_at IS NULL AND lower(name)=?",
+            (event_id, lowered),
+        ).fetchall()
+        if len(matches) == 1:
+            row = matches[0]
+    if row is None:
+        return None, "Aucun inscrit ne correspond à ce code ou à cet e-mail."
+    return row, None
+
+
+def active_orgs(con, event_id: str) -> list[dict]:
+    """Liste des organisations actives d'un congrès, telle que la voit le participant."""
+    return [org_json(item) for item in con.execute(
+        "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
+        (event_id,)).fetchall()]
+
+
+def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
+    """Enregistre l'arrivée d'un participant depuis le lien public (idempotent)."""
     bucket = f"{token}:{ip or 'anonyme'}"
     self_checkin_throttle(bucket)
     con = connect()
@@ -2406,29 +2437,15 @@ def perform_self_checkin(token: str, query: str, ip: str = "") -> dict:
         if event["status"] == "archived":
             raise ValueError("Le check-in en ligne est fermé pour ce congrès.")
         event_id = event["id"]
-        lowered = entry.lower()
-        row = con.execute(
-            "SELECT * FROM participants WHERE event_id=? AND deleted_at IS NULL "
-            "AND (lower(code)=? OR lower(email)=?) ORDER BY created_at LIMIT 1",
-            (event_id, lowered, lowered),
-        ).fetchone()
-        if row is None and len(entry) >= 4:
-            # Nom complet exact, uniquement s'il est unique dans le congrès.
-            matches = con.execute(
-                "SELECT * FROM participants WHERE event_id=? AND deleted_at IS NULL AND lower(name)=?",
-                (event_id, lowered),
-            ).fetchall()
-            if len(matches) == 1:
-                row = matches[0]
-        if row is None:
-            self_checkin_record_failure(bucket)
-            raise LookupError("Aucun inscrit ne correspond à ce code ou à cet e-mail.")
+        row, problem = self_find_participant(con, event_id, query)
+        if problem:
+            if "Aucun inscrit" in problem:
+                self_checkin_record_failure(bucket)
+            raise (LookupError(problem) if "Aucun inscrit" in problem else ValueError(problem))
         # Prise en charge : l'organisation de la fiche est rapprochée de la liste
         # des organisations du congrès (calcul local, insensible aux accents,
         # à la casse et à la forme juridique).
-        orgs = [org_json(item) for item in con.execute(
-            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
-            (event_id,)).fetchall()]
+        orgs = active_orgs(con, event_id)
         care = care_for_person(row, orgs)
         care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
         payment = self_payment_state(con, event_id, row)
@@ -2471,9 +2488,7 @@ def perform_self_care(token: str, participant_id: str, org_name: str, ip: str = 
         if event["status"] == "archived":
             raise ValueError("Le check-in en ligne est fermé pour ce congrès.")
         event_id = event["id"]
-        orgs = [org_json(row) for row in con.execute(
-            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
-            (event_id,)).fetchall()]
+        orgs = active_orgs(con, event_id)
         if not orgs:
             raise ValueError("Aucune organisation n’est encore définie pour ce congrès.")
         person_id = clean_text(participant_id, 100)
@@ -2521,9 +2536,7 @@ def perform_self_payment(token: str, participant_id: str, covered: bool, ip: str
             (person_id, event_id)).fetchone()
         if not row:
             raise LookupError("Inscrit introuvable.")
-        orgs = [org_json(item) for item in con.execute(
-            "SELECT * FROM event_orgs WHERE event_id=? AND active=1 ORDER BY sort_order, name COLLATE NOCASE",
-            (event_id,)).fetchall()]
+        orgs = active_orgs(con, event_id)
         care = care_for_person(row, orgs)
         org_name = care["org"]["name"] if care["org"] else ""
         if covered and not org_name:
@@ -2571,6 +2584,69 @@ def perform_self_payment(token: str, participant_id: str, covered: bool, ip: str
         con.close()
 
 
+def care_preview(event_id: str, query: str) -> dict:
+    """Diagnostic : ce que verrait ce participant au self check-in, et pourquoi.
+
+    Aucune écriture : sert à l'organisateur pour vérifier sa saisie (liste des
+    organisations, organisation de la fiche, adresse e-mail).
+    """
+    entry = clean_text(query, 180).strip()
+    con = connect()
+    try:
+        event = _event_row(con, event_id)
+        if not event:
+            raise LookupError("Congrès introuvable.")
+        orgs = active_orgs(con, event_id)
+        all_orgs = [org_json(item) for item in con.execute(
+            "SELECT * FROM event_orgs WHERE event_id=? ORDER BY sort_order, name COLLATE NOCASE", (event_id,)).fetchall()]
+        inactive = len(all_orgs) - len(orgs)
+        base = {"ok": True, "eventId": event_id, "orgCount": len(orgs), "inactiveOrgs": inactive,
+                "eventArchived": event["status"] == "archived",
+                "selfEnabled": bool(event["self_checkin_enabled"]) and bool(event["self_checkin_token"])}
+        if len(entry) < 3:
+            return {**base, "found": False, "verdict": "no-query",
+                    "hint": "Saisissez un code badge, un e-mail ou un nom pour lancer le test."}
+        row, problem = self_find_participant(con, event_id, entry)
+        if problem:
+            return {**base, "found": False, "verdict": "not-found", "hint": problem}
+        care = care_for_person(row, orgs)
+        payment = self_payment_state(con, event_id, row)
+        person = {
+            "id": row["id"], "name": row["name"],
+            "company": row["company"] or "", "email": row["email"] or "",
+            "emailDomain": email_domain(row["email"] if "email" in row.keys() else ""),
+            "careOrg": (row["care_org"] if "care_org" in row.keys() else "") or "",
+            "careState": (row["care_state"] if "care_state" in row.keys() else "") or "",
+            "checkedIn": bool(row["checked_in_at"]),
+        }
+        care["choices"] = [{"name": item["name"], "desk": item["desk"] or ""} for item in orgs[:80]]
+        if not orgs:
+            verdict, hint = "no-orgs", (
+                "Aucune organisation active dans ce congrès : le participant ne verra aucune prise en charge. "
+                "Ajoutez vos organisations, puis enregistrez la liste.")
+        elif care["org"] and care["confirmed"]:
+            verdict, hint = "confirmed", f"Prise en charge confirmée : {care['org']['name']}."
+        elif care["org"]:
+            source = {"contact": "l’adresse e-mail du référent",
+                      "email": "le domaine de son adresse e-mail",
+                      "company": "l’organisation inscrite sur sa fiche"}.get(care.get("source", ""), "sa fiche")
+            verdict, hint = "matched", (
+                f"Organisation reconnue d’après {source} (score {care['score']:.2f}). "
+                "Le participant verra « Organisation reconnue » et devra confirmer en un appui.")
+        elif care.get("suggestions"):
+            verdict, hint = "suggested", (
+                "Aucun rapprochement automatique : le participant devra choisir dans la liste "
+                f"(propositions : {', '.join(item['name'] for item in care['suggestions'])}).")
+        else:
+            verdict, hint = "none", (
+                "Aucune organisation reconnue : le participant devra choisir lui-même dans la liste. "
+                "Renseignez le champ « organisation » de sa fiche, ou l’e-mail du référent sur l’organisation.")
+        return {**base, "found": True, "verdict": verdict, "hint": hint,
+                "participant": person, "care": care, "payment": payment}
+    finally:
+        con.close()
+
+
 def self_checkin_config(event_id: str) -> dict:
     """Réglage du self check-in d'un congrès (administrateur)."""
     con = connect()
@@ -2578,9 +2654,12 @@ def self_checkin_config(event_id: str) -> dict:
         event = _event_row(con, event_id)
         if not event:
             raise LookupError("Congrès introuvable.")
+        org_count = con.execute(
+            "SELECT COUNT(*) AS n FROM event_orgs WHERE event_id=? AND active=1", (event_id,)).fetchone()["n"]
         return {"enabled": bool(event["self_checkin_enabled"]),
                 "token": event["self_checkin_token"] or "",
                 "event": self_public_event(event),
+                "orgCount": int(org_count or 0),
                 "counts": self_checkin_snapshot(con, event_id)}
     finally:
         con.close()
@@ -3231,6 +3310,11 @@ class Handler(BaseHTTPRequestHandler):
             self.json(200, {
                 "ok": True, "time": utc_now(), "storage": db_backend(),
                 "database": db_display_path(), "persistent": not db_is_ephemeral(),
+                # Version de sauvegarde = version du code déployé, et fonctions
+                # disponibles : utile pour vérifier qu'un déploiement est bien passé.
+                "version": BACKUP_VERSION,
+                "features": ["rush", "self-checkin", "organisations", "prise-en-charge",
+                             "paiement-pris-en-charge"],
             })
             return
         self_public = re.fullmatch(r"/api/self/([A-Za-z0-9._-]{20,80})", path)
@@ -3482,6 +3566,20 @@ class Handler(BaseHTTPRequestHandler):
             if excel_match:
                 if not self.require_admin(user): return
                 self.import_excel(excel_match.group(1), user)
+                return
+            match = re.fullmatch(r"/api/events/([^/]+)/orgs/preview", path)
+            if match:
+                # Diagnostic ouvert à tous les comptes : que verra ce participant ?
+                try:
+                    body = self.read_json()
+                except ValueError:
+                    body = {}
+                try:
+                    self.json(200, care_preview(match.group(1), body.get("query", "")))
+                except LookupError as exc:
+                    self.json(404, {"error": str(exc)})
+                except ValueError as exc:
+                    self.json(400, {"error": str(exc)})
                 return
             match = re.fullmatch(r"/api/events/([^/]+)/orgs/from-participants", path)
             if match:
