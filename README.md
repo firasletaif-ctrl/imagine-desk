@@ -134,8 +134,11 @@ Pfizer ? »**.
   (ou le bouton *Tester la prise en charge* de sa fiche) affiche **exactement** ce qu’il obtient au
   self check-in : organisation trouvée, indice utilisé (fiche, e-mail du référent, domaine de son
   adresse), score, état du paiement — et, s’il n’y a pas de rapprochement, **la raison** :
-  liste d’organisations vide, fiche sans organisation, ou nom trop éloigné. Aucun test n’écrit quoi
-  que ce soit (route `POST /api/events/{id}/orgs/preview`).
+  liste d’organisations vide, organisation **désactivée**, fiche sans organisation, ou nom trop
+  éloigné. Aucun test n’écrit quoi que ce soit (route `POST /api/events/{id}/orgs/preview`).
+- Le diagnostic propose directement le geste qui répare : **réactiver** l’organisation désactivée
+  (la case « Active » est recochée) ou **ajouter à la liste** l’organisation écrite sur la fiche —
+  il ne reste plus qu’à indiquer le stand puis *Enregistrer les organisations*.
 - Pour vérifier qu’un déploiement est bien à jour, ouvrez `/api/health` : il indique `version` (9) et
   la liste `features` (`organisations`, `prise-en-charge`, `paiement-pris-en-charge`).
 - La liste est **propre au congrès** ; elle part avec lui dans la corbeille, revient à la

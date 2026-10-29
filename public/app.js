@@ -2112,6 +2112,36 @@ function addOrgRow(){
   last?.scrollIntoView({block:'nearest'});
   $('.org-name',last)?.focus();
 }
+// Diagnostic : ajoute directement l’organisation de la fiche pour que le
+// participant soit reconnu au self check-in en un seul geste.
+function addOrgRowNamed(name){
+  const rows=$('#orgRows');if(!rows)return;
+  const label=String(name||'').trim();
+  if(!label)return;
+  const existing=$$('#orgRows .org-row').find(row=>norm($('[data-org-field="name"]',row)?.value)===norm(label));
+  if(existing){
+    existing.scrollIntoView({block:'nearest'});
+    const active=$('[data-org-field="active"]',existing);
+    if(active&&!active.checked)active.checked=true;
+    showToast(`« ${label} » est déjà dans la liste. Vérifiez son stand, puis enregistrez.`);
+    return;
+  }
+  rows.insertAdjacentHTML('beforeend',orgRowHTML({name:label,active:true}));
+  const all=$$('#orgRows .org-row');
+  const last=all[all.length-1];
+  last?.scrollIntoView({block:'nearest'});
+  $('[data-org-field="desk"]',last)?.focus();
+  showToast(`« ${label} » ajoutée : indiquez le stand, puis « Enregistrer les organisations ».`);
+}
+function activateOrgRow(name){
+  const label=String(name||'').trim();
+  const row=$$('#orgRows .org-row').find(item=>norm($('[data-org-field="name"]',item)?.value)===norm(label));
+  if(!row){showToast('Cette organisation n’est plus dans la liste : vérifiez après enregistrement.');return;}
+  const active=$('[data-org-field="active"]',row);
+  if(active)active.checked=true;
+  row.scrollIntoView({block:'nearest'});
+  showToast(`« ${label} » est cochée « Active » : enregistrez la liste pour que le participant soit reconnu.`);
+}
 function moveOrgRow(button,delta){
   const row=button.closest('.org-row');if(!row)return;
   if(delta<0&&row.previousElementSibling)row.parentNode.insertBefore(row,row.previousElementSibling);
@@ -2183,6 +2213,7 @@ const ORG_VERDICTS={
   matched:{label:'Organisation reconnue',tone:'warn'},
   suggested:{label:'À choisir par le participant',tone:'warn'},
   none:{label:'Aucune organisation reconnue',tone:'ko'},
+  inactive:{label:'Organisation désactivée',tone:'warn'},
   'no-orgs':{label:'Aucune organisation dans le congrès',tone:'ko'},
   'not-found':{label:'Participant introuvable',tone:'ko'},
   'no-query':{label:'Test en attente',tone:'idle'}
@@ -2229,7 +2260,11 @@ function renderOrgsDiagnostic(data){
     <p class="orgs-diag-verdict"><i></i>${esc(verdict.label)}</p>
     ${rows.join('')}
     <p class="orgs-diag-hint">${esc(data.hint||'')}</p>
-    ${data.orgCount===0?'<button class="btn btn-primary btn-sm" type="button" data-action="org-add">Ajouter une organisation</button>':''}
+    <div class="orgs-diag-actions">
+      ${data.orgCount===0?'<button class="btn btn-primary btn-sm" type="button" data-action="org-add">Ajouter une organisation</button>':''}
+      ${data.verdict==='inactive'&&data.dormantOrg?`<button class="btn btn-primary btn-sm" type="button" data-action="orgs-diag-activate" data-name="${esc(data.dormantOrg.name)}">Réactiver « ${esc(data.dormantOrg.name)} »</button>`:''}
+      ${data.found&&!org&&person&&person.company&&data.orgCount>0?`<button class="btn btn-secondary btn-sm" type="button" data-action="orgs-diag-add" data-name="${esc(person.company)}">Ajouter « ${esc(person.company)} » à la liste</button>`:''}
+    </div>
   </div>`;
 }
 
@@ -2267,6 +2302,8 @@ document.addEventListener('click',async event=>{
   else if(action==='open-orgs'){await openOrgsModal();return;}
   else if(action==='test-care'){const person=findPerson(id);await openOrgsModal(person?(person.code||person.email||person.name):'');return;}
   else if(action==='org-add'){addOrgRow();return;}
+  else if(action==='orgs-diag-add'){addOrgRowNamed(button.dataset.name);return;}
+  else if(action==='orgs-diag-activate'){activateOrgRow(button.dataset.name);return;}
   else if(action==='org-up'){moveOrgRow(button,-1);return;}
   else if(action==='org-down'){moveOrgRow(button,1);return;}
   else if(action==='org-remove'){button.closest('.org-row')?.remove();return;}
