@@ -114,8 +114,15 @@ Quand un participant rattaché à une organisation n’a pas encore de paiement 
 check-in **ne lui réclame pas d’argent** : il lui demande d’abord **« Êtes-vous pris en charge par
 Pfizer ? »**.
 
-- **« Oui, je suis pris en charge »** → **aucun paiement à régler** : le paiement passe en *exonéré*
-  avec le tarif « Prise en charge — Pfizer », signé `self-checkin`. Le desk ne le relance pas.
+- **Une seule question, un seul geste.** Quand l’organisation est reconnue, la page affiche son nom,
+  le point d’accueil et le référent, puis la question « Êtes-vous pris en charge par Pfizer ? ».
+  Il n’y a pas de double validation à faire.
+- **« Oui, je suis pris en charge »** → la page annonce **« Vous êtes pris en charge »** et
+  **« Aucun paiement à régler »** : le paiement passe en *exonéré* avec le tarif
+  « Prise en charge — Pfizer », signé `self-checkin`. Le desk ne le relance pas.
+- **Choisir son organisation dans la liste vaut la même réponse** : si le rapprochement automatique
+  échoue, ou si le participant touche « Ce n’est pas mon organisation », le nom qu’il désigne est
+  enregistré (`care_org`) **et** l’inscription est marquée prise en charge — il n’a rien à payer.
 - **« Non, je dois payer »** → la page indique **« Paiement à régler à l’accueil »** avec les tarifs
   indicatifs du congrès ; l’inscrit reste *à encaisser* dans le desk. Il peut se raviser en un appui.
 - Un paiement **déjà encaissé** au desk n’est jamais écrasé : la page dit simplement « Votre paiement

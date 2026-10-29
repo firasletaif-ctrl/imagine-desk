@@ -1,4 +1,4 @@
-const CACHE_NAME = 'imagine-events-desk-shell-v21-diagnostic-organisation';
+const CACHE_NAME = 'imagine-events-desk-shell-v22-question-unique';
 const SHELL = ['/', '/styles.css', '/app.js', '/vendor/qrcode.js', '/vendor/qrcode-utf8.js', '/manifest.webmanifest', '/img/logo.png', '/img/favicon-32.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).catch(() => {}));

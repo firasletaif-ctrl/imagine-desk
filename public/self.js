@@ -120,22 +120,34 @@
     company: 'D’après votre inscription,'
   };
 
+  // Bloc d'information : l'organisation retenue, où aller et qui prend en charge.
+  // La question « êtes-vous pris en charge ? » vit dans le bloc paiement juste
+  // en dessous : une seule question, donc un seul geste pour le participant.
   function careCardHtml(org, confirmed, source) {
+    var pay = state.payment || {};
+    var paid = pay.status === 'paid';
+    var change = '<button class="self-care-change" type="button" data-self-care-change="1">Ce n’est pas mon organisation</button>';
+    var actions;
+    if (confirmed) actions = change;
+    else if (paid) {
+      // Paiement déjà réglé : on peut encore confirmer l'organisation, sans question d'argent.
+      actions = '<div class="self-care-actions">' +
+        '<button class="self-care-yes" type="button" data-self-care-pick="' + escapeHtml(org.name) + '">Oui, c’est mon organisation</button>' +
+        '</div>' + change;
+    } else {
+      // Question de paiement juste en dessous : un seul geste à faire.
+      actions = change;
+    }
     return '' +
       '<div class="self-care ' + (confirmed ? 'self-care-confirmed' : 'self-care-suggested') + '">' +
-        '<p class="self-care-kicker">' + (confirmed ? 'Vous êtes pris en charge' : 'Organisation reconnue') + '</p>' +
+        '<p class="self-care-kicker">' + (confirmed ? 'Vous êtes pris en charge' : 'Prise en charge') + '</p>' +
         (CARE_SOURCES[source] ? '<p class="self-care-note">' + escapeHtml(CARE_SOURCES[source]) + ' vous êtes rattaché à cette organisation.</p>' : '') +
         '<h2 class="self-care-name">' + escapeHtml(org.name) + '</h2>' +
         (org.desk ? '<p class="self-care-line self-care-desk"><span>Où aller</span><strong>' + escapeHtml(org.desk) + '</strong></p>' : '') +
         (org.host ? '<p class="self-care-line"><span>Qui vous prend en charge</span><strong>' + escapeHtml(org.host) + '</strong></p>' : '') +
         (org.contact ? '<p class="self-care-line"><span>Contact sur place</span><strong>' + escapeHtml(org.contact) + '</strong></p>' : '') +
         (org.message ? '<p class="self-care-message">' + escapeHtml(org.message) + '</p>' : '') +
-        (confirmed
-          ? '<button class="self-care-change" type="button" data-self-care-change="1">Ce n’est pas mon organisation</button>'
-          : '<div class="self-care-actions">' +
-              '<button class="self-care-yes" type="button" data-self-care-pick="' + escapeHtml(org.name) + '">Oui, c’est mon organisation</button>' +
-              '<button class="self-care-change" type="button" data-self-care-change="1">Choisir une autre</button>' +
-            '</div>') +
+        actions +
       '</div>';
   }
 
@@ -205,6 +217,7 @@
   function payNeedsAnswer() {
     var pay = state.payment;
     if (!pay || pay.status !== 'unpaid' || pay.state) return false;
+    if (state.careOpen) return false;   // il choisit d'abord son organisation
     return !!(state.care && state.care.org);
   }
 
@@ -353,6 +366,10 @@
       .then(function (result) {
         if (result.ok && result.data && result.data.care) {
           state.care = result.data.care;
+          // Choisir son organisation vaut « je suis pris en charge » : le serveur
+          // renvoie le paiement à jour (exonéré), sinon la question d'argent
+          // resterait affichée alors qu'elle vient d'être répondue.
+          if (result.data.payment) state.payment = result.data.payment;
           if (result.data.participant) state.person = result.data.participant;
           state.careOpen = false;
           state.careSkipped = false;
